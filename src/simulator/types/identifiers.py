@@ -1,4 +1,4 @@
-"""Domain identifiers"""
+"""Domain identifiers and coordinates"""
 from enum import Enum
 from typing import NewType
 
@@ -10,8 +10,19 @@ class PlayerId(Enum):
     P3 = "P3"
     P4 = "P4"
 
+    @staticmethod
+    def all_players():
+        """Get all four players in order"""
+        return [PlayerId.P1, PlayerId.P2, PlayerId.P3, PlayerId.P4]
 
-# Coordinate and ID types
+
+class BuildingType(Enum):
+    """Types of buildings"""
+    SETTLEMENT = "SETTLEMENT"
+    CITY = "CITY"
+
+
+# Type aliases for identifiers
 TileId = NewType("TileId", str)
 VertexId = NewType("VertexId", str)
 EdgeId = NewType("EdgeId", str)
@@ -19,7 +30,7 @@ PortId = NewType("PortId", str)
 
 
 class Coordinate:
-    """2D coordinate for vertices"""
+    """2D coordinate for vertices in the Catan coordinate system"""
     def __init__(self, x: int, y: int):
         self.x = x
         self.y = y
@@ -34,3 +45,9 @@ class Coordinate:
 
     def __repr__(self):
         return f"Coordinate({self.x}, {self.y})"
+
+    def __lt__(self, other):
+        """For sorting coordinates"""
+        if self.x != other.x:
+            return self.x < other.x
+        return self.y < other.y

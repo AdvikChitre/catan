@@ -4,6 +4,7 @@ from .board_state import BoardState
 from .player_state import PlayerState
 from .bank_state import BankState
 from .turn_state import TurnState
+from .building import Building, Road, VertexState, EdgeState, TileState
 
 __all__ = [
     "GameState",
@@ -13,4 +14,9 @@ __all__ = [
     "PlayerState",
     "BankState",
     "TurnState",
+    "Building",
+    "Road",
+    "VertexState",
+    "EdgeState",
+    "TileState",
 ]
