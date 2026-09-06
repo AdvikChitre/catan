@@ -1,6 +1,9 @@
 """Building state types"""
-from typing import Optional, Union
+from typing import Optional, Union, TYPE_CHECKING
 from ..simulator.types.identifiers import PlayerId, BuildingType
+
+if TYPE_CHECKING:
+    from ..simulator.types.resource import ResourceType
 
 
 class Building:
@@ -83,7 +86,7 @@ class EdgeState:
 
 class TileState:
     """State of a tile"""
-    def __init__(self, tile_id: str, resource_type: 'ResourceType', 
+    def __init__(self, tile_id: str, resource_type: Optional['ResourceType'] = None,
                  number_token: Optional[int] = None, has_robber: bool = False):
         self.tile_id = tile_id
         self.resource_type = resource_type
@@ -91,4 +94,5 @@ class TileState:
         self.has_robber = has_robber
 
     def __repr__(self):
-        return f"TileState({self.tile_id}, {self.resource_type.value}, number={self.number_token}, robber={self.has_robber})"
+        resource_value = self.resource_type.value if self.resource_type is not None else "DESERT"
+        return f"TileState({self.tile_id}, {resource_value}, number={self.number_token}, robber={self.has_robber})"
