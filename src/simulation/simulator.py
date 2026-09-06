@@ -106,7 +106,14 @@ class Simulator:
         bot = self.bot_manager.get_bot(player_id)
         decision = None
         if hasattr(bot, "choose_initial_placement"):
-            decision = bot.choose_initial_placement(self.build_view_for_player(player_id), choices)
+            decision = self.bot_manager.call_bot(
+                player_id,
+                "choose_initial_placement",
+                self.build_view_for_player(player_id),
+                choices,
+                default=choices[0],
+                fallback=choices[0],
+            )
         if decision is None:
             decision = choices[0]
 
@@ -185,7 +192,13 @@ class Simulator:
         for player_id in PlayerId.all_players():
             bot = self.bot_manager.get_bot(player_id)
             if hasattr(bot, "on_game_start"):
-                bot.on_game_start(self.build_view_for_player(player_id))
+                self.bot_manager.call_bot(
+                    player_id,
+                    "on_game_start",
+                    self.build_view_for_player(player_id),
+                    default=None,
+                    fallback=None,
+                )
 
         for player_id in PlayerId.all_players():
             self.event_bus.publish(
@@ -265,38 +278,61 @@ class Simulator:
         self.game_state.turn_state.phase = "PRE_ROLL"
         self.game_state.turn_state.dice_roll = None
 
+    @staticmethod
+    def _coerce_action_name(action: object, default: str) -> str:
+        """Normalize a bot decision to a safe action string."""
+        if isinstance(action, dict):
+            action_name = action.get("type")
+        else:
+            action_name = action
+
+        if action_name is None:
+            return default
+        return str(action_name).upper()
+
     def take_turn_for_current_player(self) -> None:
         """Advance the current player through the basic pre-roll and end-turn flow."""
         current_player = self.game_state.turn_state.current_player
-        bot = self.bot_manager.get_bot(current_player)
 
         if self.game_state.turn_state.phase == "PRE_ROLL":
-            action = bot.take_turn(self.build_view_for_player(current_player), ["ROLL"])
-            if isinstance(action, dict):
-                action_name = action.get("type", "ROLL")
-            else:
-                action_name = action
+            action = self.bot_manager.call_bot(
+                current_player,
+                "take_turn",
+                self.build_view_for_player(current_player),
+                ["ROLL"],
+                default="ROLL",
+                fallback="ROLL",
+            )
+            action_name = self._coerce_action_name(action, "ROLL")
 
             if action_name not in ("ROLL", "END_TURN"):
                 action_name = "ROLL"
 
             if action_name == "ROLL":
                 self.roll_dice()
-                action = bot.take_turn(self.build_view_for_player(current_player), ["END_TURN"])
-                if isinstance(action, dict):
-                    action_name = action.get("type", "END_TURN")
-                else:
-                    action_name = action
+                action = self.bot_manager.call_bot(
+                    current_player,
+                    "take_turn",
+                    self.build_view_for_player(current_player),
+                    ["END_TURN"],
+                    default="END_TURN",
+                    fallback="END_TURN",
+                )
+                action_name = self._coerce_action_name(action, "END_TURN")
                 if action_name != "END_TURN":
                     action_name = "END_TURN"
             self.end_turn()
             return
 
-        action = bot.take_turn(self.build_view_for_player(current_player), ["END_TURN"])
-        if isinstance(action, dict):
-            action_name = action.get("type", "END_TURN")
-        else:
-            action_name = action
+        action = self.bot_manager.call_bot(
+            current_player,
+            "take_turn",
+            self.build_view_for_player(current_player),
+            ["END_TURN"],
+            default="END_TURN",
+            fallback="END_TURN",
+        )
+        action_name = self._coerce_action_name(action, "END_TURN")
         if action_name == "END_TURN":
             self.end_turn()
 
