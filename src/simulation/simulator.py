@@ -143,6 +143,9 @@ class Simulator:
         if is_second_pass:
             self._award_starting_resources(player_id, settlement_vertex)
 
+        self._recalculate_victory_points()
+        self.check_victory()
+
         self.event_bus.publish(
             GameEvent(
                 "SetupPlacementMade",
@@ -460,6 +463,8 @@ class Simulator:
         board_state.edges[edge_id] = EdgeState(str(edge_id), Road(owner=player_id))
         player.roads.add(edge_id)
         player.roads_remaining = max(0, player.roads_remaining - 1)
+        self._recalculate_victory_points()
+        self.check_victory()
 
     def _steal_resource(self, player_id: PlayerId, victim_id: PlayerId):
         """Steal one random card from a victim."""
@@ -564,6 +569,8 @@ class Simulator:
                     visibility="PUBLIC",
                 )
             )
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "PLAY_KNIGHT", "tile_id": str(tile_id) if tile_id is not None else None}
 
         if card == DevelopmentCardType.ROAD_BUILDING:
@@ -585,6 +592,8 @@ class Simulator:
                     visibility="PUBLIC",
                 )
             )
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "PLAY_ROAD_BUILDING", "edges": placed}
 
         if card == DevelopmentCardType.YEAR_OF_PLENTY:
@@ -610,6 +619,8 @@ class Simulator:
                     visibility="PUBLIC",
                 )
             )
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "PLAY_YEAR_OF_PLENTY", "resources": {r.value: c for r, c in resource_choices.items()}}
 
         if card == DevelopmentCardType.MONOPOLY:
@@ -636,6 +647,8 @@ class Simulator:
                     visibility="PUBLIC",
                 )
             )
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "PLAY_MONOPOLY", "resource": resource_type.value, "amount": monopolized}
 
         raise ValueError(f"Development card {card.value} cannot be played.")
@@ -753,6 +766,9 @@ class Simulator:
             )
         )
 
+        self._recalculate_victory_points()
+        self.check_victory()
+
         return card
 
     def execute_action(self, player_id: PlayerId, action: object) -> object:
@@ -777,6 +793,8 @@ class Simulator:
             self.game_state.board_state.vertices[vertex_id] = VertexState(str(vertex_id), Building.settlement(player_id))
             player.settlements.add(vertex_id)
             player.settlements_remaining = max(0, player.settlements_remaining - 1)
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "BUILD_SETTLEMENT", "vertex": str(vertex_id)}
 
         if action_name == "BUILD_ROAD":
@@ -794,6 +812,8 @@ class Simulator:
             self.game_state.board_state.edges[edge_id] = EdgeState(str(edge_id), Road(owner=player_id))
             player.roads.add(edge_id)
             player.roads_remaining = max(0, player.roads_remaining - 1)
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "BUILD_ROAD", "edge": str(edge_id)}
 
         if action_name == "BUILD_CITY":
@@ -812,6 +832,8 @@ class Simulator:
             player.settlements.discard(vertex_id)
             player.cities.add(vertex_id)
             player.cities_remaining = max(0, player.cities_remaining - 1)
+            self._recalculate_victory_points()
+            self.check_victory()
             return {"type": "BUILD_CITY", "vertex": str(vertex_id)}
 
         if action_name == "BUY_DEVELOPMENT_CARD":
@@ -864,3 +886,100 @@ class Simulator:
             return {"type": "END_TURN"}
 
         raise ValueError(f"Unsupported action: {action_name}")
+
+    def _recalculate_largest_army(self) -> None:
+        """Assign largest army based on knights played in the current game state."""
+        for player in self.game_state.players:
+            player.has_largest_army = False
+        winner_id = None
+        winner_count = -1
+        for player in self.game_state.players:
+            if player.largest_army_count >= 3 and player.largest_army_count > winner_count:
+                winner_id = player.player_id
+                winner_count = player.largest_army_count
+        if winner_id is not None:
+            winner = self.game_state.get_player(winner_id)
+            if winner is not None:
+                winner.has_largest_army = True
+
+    def _road_neighbors(self, edge_id):
+        """Return neighboring edges that belong to the same player in the road graph."""
+        board_state = self.game_state.board_state
+        if board_state is None:
+            return []
+        edge_def = self.board_geometry.get_edge(edge_id)
+        if edge_def is None:
+            return []
+        neighbors = []
+        for vertex_id in edge_def.vertex_ids:
+            for adjacent_edge_id in self.board_geometry.get_vertex(vertex_id).adjacent_edge_ids:
+                if adjacent_edge_id == edge_id:
+                    continue
+                other = board_state.get_edge(adjacent_edge_id)
+                if other is not None and not other.road.is_empty() and other.road.owner == board_state.get_edge(edge_id).road.owner:
+                    neighbors.append(adjacent_edge_id)
+        return neighbors
+
+    def _longest_road_for_player(self, player_id: PlayerId) -> int:
+        """Compute the longest road path length for a player using a simple graph walk."""
+        board_state = self.game_state.board_state
+        if board_state is None:
+            return 0
+
+        candidate_roads = [
+            edge_id for edge_id, edge_data in board_state.edges.items()
+            if not edge_data.road.is_empty() and edge_data.road.owner == player_id
+        ]
+        if not candidate_roads:
+            return 0
+
+        best = 0
+        visited = set()
+
+        def dfs(edge_id, path_length):
+            nonlocal best
+            best = max(best, path_length)
+            visited.add(edge_id)
+            for neighbor in self._road_neighbors(edge_id):
+                if neighbor in visited:
+                    continue
+                dfs(neighbor, path_length + 1)
+
+        for edge_id in candidate_roads:
+            if edge_id in visited:
+                continue
+            dfs(edge_id, 1)
+
+        return best
+
+    def _recalculate_longest_road(self) -> None:
+        """Assign longest-road achievement to the player with the longest connected road."""
+        for player in self.game_state.players:
+            player.has_longest_road = False
+
+        lengths = {player.player_id: self._longest_road_for_player(player.player_id) for player in self.game_state.players}
+        if not lengths:
+            return
+
+        longest_id = max(lengths, key=lambda pid: (lengths[pid], pid.value))
+        if lengths[longest_id] >= 5:
+            self.game_state.get_player(longest_id).has_longest_road = True
+
+    def _recalculate_victory_points(self) -> None:
+        """Refresh each player's derived victory-point totals and achievement flags."""
+        self._recalculate_largest_army()
+        self._recalculate_longest_road()
+        for player in self.game_state.players:
+            player.victory_points = player.get_calculated_victory_points()
+
+    def check_victory(self) -> Optional[PlayerId]:
+        """Return the winner if any player has reached the standard Catan threshold."""
+        self._recalculate_victory_points()
+        for player in self.game_state.players:
+            if player.victory_points >= 10:
+                self.game_state.winner = player.player_id
+                self.game_state.status = GameStatus.COMPLETED
+                self.game_state.phase = GamePhase.GAME_OVER
+                return player.player_id
+        self.game_state.winner = None
+        return None
