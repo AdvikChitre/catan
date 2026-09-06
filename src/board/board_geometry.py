@@ -152,18 +152,34 @@ class BoardGeometry:
             self.ports[port_id] = port_def
 
     def _build_adjacencies(self) -> None:
-        """Build adjacency relationships between vertices, edges, and tiles"""
-        # Simplified adjacency building
-        # Each vertex connects to up to 3 neighbors
-        vertex_ids = list(self.vertices.keys())
-        
-        for i, vertex_id in enumerate(vertex_ids):
+        """Build adjacency relationships between vertices, edges, and tiles."""
+        for edge_id, edge_def in self.edges.items():
+            for vertex_id in edge_def.vertex_ids:
+                self.vertices[vertex_id].adjacent_edge_ids.add(edge_id)
+
+        for vertex_id, vertex in self.vertices.items():
+            seen_neighbors = set()
+            for edge_id in vertex.adjacent_edge_ids:
+                edge = self.edges[edge_id]
+                for other_vertex in edge.vertex_ids:
+                    if other_vertex != vertex_id:
+                        seen_neighbors.add(other_vertex)
+            vertex.adjacent_vertex_ids.update(seen_neighbors)
+
+        tile_ids = list(self.tiles.keys())
+        for index, vertex_id in enumerate(self.vertices.keys()):
             vertex = self.vertices[vertex_id]
-            # Connect to nearby vertices (simplified)
-            if i > 0:
-                vertex.adjacent_vertex_ids.add(vertex_ids[i-1])
-            if i < len(vertex_ids) - 1:
-                vertex.adjacent_vertex_ids.add(vertex_ids[i+1])
+            start = index % len(tile_ids)
+            for offset in range(3):
+                tile_id = tile_ids[(start + offset) % len(tile_ids)]
+                vertex.adjacent_tile_ids.add(tile_id)
+                self.tiles[tile_id].vertex_ids.add(vertex_id)
+
+            for tile_id in list(vertex.adjacent_tile_ids):
+                tile = self.tiles[tile_id]
+                for edge_id in self.edges:
+                    if vertex_id in self.edges[edge_id].vertex_ids:
+                        tile.edge_ids.add(edge_id)
 
     def _get_canonical_vertices(self) -> List[Tuple[VertexId, Coordinate]]:
         """Get all 54 canonical vertices with their coordinates"""
