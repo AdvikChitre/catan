@@ -25,6 +25,7 @@ class Simulator:
         self.board_geometry = BoardGeometry()
         self.game_state.board_state = BoardSetup.build_board_state(self.board_geometry, self.rng)
         self.game_state.bank_state = BankState()
+        self.development_deck = BoardSetup.shuffle_development_deck(self.rng)
         self.game_state.players = [PlayerState(player_id) for player_id in PlayerId.all_players()]
         self.game_state.turn_state = TurnState()
         self.game_state.turn_state.current_player = PlayerId.P1
@@ -384,3 +385,39 @@ class Simulator:
             __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP: 1,
             __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE: 1,
         }.items())
+
+    def buy_development_card(self, player_id: PlayerId):
+        """Buy one development card for the specified player, drawing from the seeded deck."""
+        if not self.can_buy_development_card(player_id):
+            raise ValueError(f"Player {player_id} cannot buy a development card.")
+
+        if not self.development_deck:
+            raise ValueError("Development deck is empty.")
+
+        player = self.game_state.get_player(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player {player_id}.")
+
+        card = self.development_deck.pop(0)
+        self.game_state.bank_state.development_cards[card] -= 1
+        player.development_cards[card] += 1
+
+        for resource_type in [
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE,
+        ]:
+            player.resources[resource_type] -= 1
+
+        self.event_bus.publish(
+            GameEvent(
+                "DevelopmentCardPurchased",
+                data={"player_id": player_id.value, "card": card.value},
+                game_id=self.game_state.game_id,
+                turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                player_id=player_id,
+                visibility="PUBLIC",
+            )
+        )
+
+        return card
