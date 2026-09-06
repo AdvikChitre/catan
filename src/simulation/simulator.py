@@ -305,3 +305,82 @@ class Simulator:
 
         for _ in range(8):
             self.take_turn_for_current_player()
+
+    def can_build_settlement(self, player_id: PlayerId, vertex_id) -> bool:
+        """Check whether a settlement can legally be built at this vertex."""
+        player = self.game_state.get_player(player_id)
+        if player is None or player.settlements_remaining <= 0:
+            return False
+
+        board_state = self.game_state.board_state
+        if board_state is None:
+            return False
+
+        if vertex_id in board_state.vertices and not board_state.vertices[vertex_id].building.is_empty():
+            return False
+
+        vertex_def = self.board_geometry.get_vertex(vertex_id)
+        if vertex_def is None:
+            return False
+
+        for neighbor_id in vertex_def.adjacent_vertex_ids:
+            if neighbor_id in board_state.vertices and not board_state.vertices[neighbor_id].building.is_empty():
+                return False
+
+        return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WOOD: 1,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.BRICK: 1,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP: 1,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 1,
+        }.items())
+
+    def can_build_road(self, player_id: PlayerId, edge_id) -> bool:
+        """Check whether a road can legally be built on the given edge."""
+        player = self.game_state.get_player(player_id)
+        if player is None or player.roads_remaining <= 0:
+            return False
+
+        board_state = self.game_state.board_state
+        if board_state is None:
+            return False
+
+        if edge_id in board_state.edges and not board_state.edges[edge_id].road.is_empty():
+            return False
+
+        return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WOOD: 1,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.BRICK: 1,
+        }.items())
+
+    def can_build_city(self, player_id: PlayerId, vertex_id) -> bool:
+        """Check whether a settlement can be upgraded to a city."""
+        player = self.game_state.get_player(player_id)
+        if player is None or player.cities_remaining <= 0:
+            return False
+
+        board_state = self.game_state.board_state
+        if board_state is None:
+            return False
+
+        if vertex_id not in board_state.vertices:
+            return False
+
+        building = board_state.vertices[vertex_id].building
+        if building.is_empty() or building.type is None or building.type.value != "SETTLEMENT" or building.owner != player_id:
+            return False
+
+        return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 2,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE: 3,
+        }.items())
+
+    def can_buy_development_card(self, player_id: PlayerId) -> bool:
+        """Check whether a development card purchase is legal."""
+        player = self.game_state.get_player(player_id)
+        if player is None:
+            return False
+        return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 1,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP: 1,
+            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE: 1,
+        }.items())
