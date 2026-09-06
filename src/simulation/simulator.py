@@ -8,6 +8,7 @@ from ..bots import BotManager
 from ..core import BankState, GamePhase, GameState, GameStatus, PlayerState, TurnState
 from ..core.building import Building, EdgeState, Road, VertexState
 from ..events import EventBus, GameEvent
+from ..replay import ReplayRecorder
 from ..simulation.seeded_rng import SeededRng
 from ..simulator.types.identifiers import PlayerId
 from ..simulator.types.resource import DevelopmentCardType, ResourceType
@@ -34,6 +35,12 @@ class Simulator:
         self.game_state.turn_state.phase = "PRE_ROLL"
         self.bot_manager = BotManager()
         self.event_bus = EventBus()
+        # Replay recorder subscribes to all events for export and analysis
+        self.replay_recorder = ReplayRecorder()
+        self.event_bus.subscribe(self.replay_recorder.record_event, player_id=None)
+        # seed and game id metadata for replay consumers
+        self.replay_recorder.metadata["seed"] = self.game_state.seed
+        self.replay_recorder.metadata["game_id"] = self.game_state.game_id
 
     def register_bots(self, bots: Dict[PlayerId, object]) -> None:
         """Register exactly four bots for the four players."""
