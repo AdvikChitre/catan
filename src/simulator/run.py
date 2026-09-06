@@ -1,28 +1,39 @@
 """Main entry point for the simulator"""
-from simulation import Simulator
-from simulator.types.identifiers import PlayerId
-from bots.bot_interface import BotInterface
+from __future__ import annotations
+
+from typing import Any, List
+
+from ..bots.bot_interface import BotInterface
+from ..views import GameView
+from ..simulator.types.identifiers import PlayerId
+from ..simulation import Simulator
 
 
 class DummyBot(BotInterface):
-    """Simple test bot for initial testing"""
-    def take_turn(self, view, available_actions):
-        """Return the first available action"""
+    """Simple deterministic bot for early simulation testing."""
+    def on_game_start(self, view: GameView) -> None:
+        """No-op at game start."""
+        pass
+
+    def take_turn(self, view: GameView, available_actions: List[Any]):
+        """Return the first legal action or None if there are no choices."""
         if available_actions:
             return available_actions[0]
         return None
 
-    def on_event(self, event):
-        """Receive a game event"""
+    def on_event(self, event: dict) -> None:
+        """Receive a game event."""
+        pass
+
+    def on_game_end(self, result: Any) -> None:
+        """No-op at game end."""
         pass
 
 
 def main():
-    """Run a complete game with dummy bots"""
-    # Create simulator with a seed for determinism
+    """Run a complete game with dummy bots."""
     simulator = Simulator(seed=42)
 
-    # Register four dummy bots
     bots = {
         PlayerId.P1: DummyBot(),
         PlayerId.P2: DummyBot(),
@@ -31,7 +42,6 @@ def main():
     }
     simulator.register_bots(bots)
 
-    # Run the game
     print("Starting Catan simulator...")
     simulator.run()
     print("Game complete!")
