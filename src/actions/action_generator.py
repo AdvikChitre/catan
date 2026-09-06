@@ -64,4 +64,14 @@ class ActionGenerator:
             }):
                 actions.append(AvailableAction("BUY_DEVELOPMENT_CARD"))
 
+            if player.development_cards.get(__import__("src.simulator.types.resource", fromlist=["DevelopmentCardType"]).DevelopmentCardType.KNIGHT, 0) > 0:
+                actions.append(AvailableAction("PLAY_KNIGHT"))
+            if player.development_cards.get(__import__("src.simulator.types.resource", fromlist=["DevelopmentCardType"]).DevelopmentCardType.ROAD_BUILDING, 0) > 0:
+                actions.append(AvailableAction("PLAY_ROAD_BUILDING"))
+            if player.development_cards.get(__import__("src.simulator.types.resource", fromlist=["DevelopmentCardType"]).DevelopmentCardType.YEAR_OF_PLENTY, 0) > 0:
+                actions.append(AvailableAction("PLAY_YEAR_OF_PLENTY"))
+            if player.development_cards.get(__import__("src.simulator.types.resource", fromlist=["DevelopmentCardType"]).DevelopmentCardType.MONOPOLY, 0) > 0:
+                actions.append(AvailableAction("PLAY_MONOPOLY"))
+            actions.append(AvailableAction("TRADE"))
+
         return actions

@@ -10,6 +10,7 @@ from ..core.building import Building, EdgeState, Road, VertexState
 from ..events import EventBus, GameEvent
 from ..simulation.seeded_rng import SeededRng
 from ..simulator.types.identifiers import PlayerId
+from ..simulator.types.resource import DevelopmentCardType, ResourceType
 from ..views import GameViewBuilder
 
 
@@ -329,10 +330,10 @@ class Simulator:
                 return False
 
         return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WOOD: 1,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.BRICK: 1,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP: 1,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 1,
+            ResourceType.WOOD: 1,
+            ResourceType.BRICK: 1,
+            ResourceType.SHEEP: 1,
+            ResourceType.WHEAT: 1,
         }.items())
 
     def can_build_road(self, player_id: PlayerId, edge_id) -> bool:
@@ -349,8 +350,8 @@ class Simulator:
             return False
 
         return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WOOD: 1,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.BRICK: 1,
+            ResourceType.WOOD: 1,
+            ResourceType.BRICK: 1,
         }.items())
 
     def can_build_city(self, player_id: PlayerId, vertex_id) -> bool:
@@ -371,8 +372,8 @@ class Simulator:
             return False
 
         return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 2,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE: 3,
+            ResourceType.WHEAT: 2,
+            ResourceType.ORE: 3,
         }.items())
 
     def can_buy_development_card(self, player_id: PlayerId) -> bool:
@@ -381,10 +382,342 @@ class Simulator:
         if player is None:
             return False
         return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in {
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 1,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP: 1,
-            __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE: 1,
+            ResourceType.WHEAT: 1,
+            ResourceType.SHEEP: 1,
+            ResourceType.ORE: 1,
         }.items())
+
+    def _coerce_resource_type(self, value):
+        """Normalize a resource-like input to a ResourceType enum."""
+        if isinstance(value, ResourceType):
+            return value
+        if isinstance(value, str):
+            normalized = value.upper().replace("-", "_")
+            return ResourceType[normalized]
+        raise ValueError(f"Unsupported resource type: {value!r}")
+
+    def _coerce_development_card(self, value):
+        """Normalize a development-card-like input to a DevelopmentCardType enum."""
+        if isinstance(value, DevelopmentCardType):
+            return value
+        if isinstance(value, str):
+            normalized = value.upper().replace("-", "_")
+            return DevelopmentCardType[normalized]
+        raise ValueError(f"Unsupported development card type: {value!r}")
+
+    def _normalize_resource_dict(self, values):
+        """Normalize resource data into a dict keyed by ResourceType."""
+        if values is None:
+            return {}
+        if isinstance(values, dict):
+            return {self._coerce_resource_type(k): int(v) for k, v in values.items()}
+        if isinstance(values, (list, tuple, set)):
+            counts = {}
+            for item in values:
+                resource_type = self._coerce_resource_type(item)
+                counts[resource_type] = counts.get(resource_type, 0) + 1
+            return counts
+        raise ValueError(f"Unsupported resource payload: {values!r}")
+
+    def _player_has_resources(self, player: PlayerState, resource_map: Dict[ResourceType, int]) -> bool:
+        return all(player.resources.get(resource_type, 0) >= amount for resource_type, amount in resource_map.items())
+
+    def _place_road(self, player_id: PlayerId, edge_id) -> None:
+        """Place a road for a player when the edge is legal."""
+        board_state = self.game_state.board_state
+        if board_state is None:
+            raise ValueError("Board state is not initialized.")
+        if edge_id in board_state.edges and not board_state.edges[edge_id].road.is_empty():
+            raise ValueError(f"Road already exists on {edge_id}.")
+
+        edge_def = self.board_geometry.get_edge(edge_id)
+        if edge_def is None:
+            raise ValueError(f"Unknown edge: {edge_id}.")
+
+        player = self.game_state.get_player(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player {player_id}.")
+
+        connected = False
+        for vertex_id in edge_def.vertex_ids:
+            vertex_state = board_state.get_vertex(vertex_id)
+            if vertex_state is not None and not vertex_state.building.is_empty() and vertex_state.building.owner == player_id:
+                connected = True
+                break
+            vertex_def = self.board_geometry.get_vertex(vertex_id)
+            if vertex_def is None:
+                continue
+            for adjacent_vertex_id in vertex_def.adjacent_vertex_ids:
+                adjacent_vertex = board_state.get_vertex(adjacent_vertex_id)
+                if adjacent_vertex is not None and not adjacent_vertex.building.is_empty() and adjacent_vertex.building.owner == player_id:
+                    connected = True
+                    break
+            if connected:
+                break
+        if not connected:
+            raise ValueError(f"Road placement on {edge_id} is not connected to the player's network.")
+
+        board_state.edges[edge_id] = EdgeState(str(edge_id), Road(owner=player_id))
+        player.roads.add(edge_id)
+        player.roads_remaining = max(0, player.roads_remaining - 1)
+
+    def _steal_resource(self, player_id: PlayerId, victim_id: PlayerId):
+        """Steal one random card from a victim."""
+        if player_id == victim_id:
+            return None
+        player = self.game_state.get_player(player_id)
+        victim = self.game_state.get_player(victim_id)
+        if player is None or victim is None:
+            return None
+
+        stealable = [resource_type for resource_type, amount in victim.resources.items() if amount > 0]
+        if not stealable:
+            return None
+
+        resource_type = self.rng.choice(stealable)
+        victim.resources[resource_type] -= 1
+        player.resources[resource_type] += 1
+        self.event_bus.publish(
+            GameEvent(
+                "ResourceStolen",
+                data={
+                    "from_player": victim_id.value,
+                    "to_player": player_id.value,
+                    "resource": resource_type.value,
+                },
+                game_id=self.game_state.game_id,
+                turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                player_id=player_id,
+                visibility="PRIVATE",
+            )
+        )
+        return resource_type
+
+    def move_robber(self, tile_id, victim_id: Optional[PlayerId] = None, player_id: Optional[PlayerId] = None) -> dict:
+        """Move the robber to a new tile and optionally steal one resource from a victim."""
+        board_state = self.game_state.board_state
+        if board_state is None:
+            raise ValueError("Board state is not initialized.")
+        if tile_id not in board_state.tiles:
+            raise ValueError(f"Unknown tile {tile_id}.")
+        if board_state.robber_tile_id is not None and board_state.robber_tile_id == tile_id:
+            raise ValueError(f"Robber already on tile {tile_id}.")
+
+        if board_state.robber_tile_id is not None:
+            board_state.tiles[board_state.robber_tile_id].has_robber = False
+        board_state.tiles[tile_id].has_robber = True
+        board_state.robber_tile_id = tile_id
+
+        if player_id is not None and victim_id is not None:
+            self._steal_resource(player_id, victim_id)
+
+        self.event_bus.publish(
+            GameEvent(
+                "RobberMoved",
+                data={"tile_id": str(tile_id), "victim_id": victim_id.value if victim_id is not None else None},
+                game_id=self.game_state.game_id,
+                turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                player_id=player_id,
+                visibility="PUBLIC",
+            )
+        )
+        return {"type": "MOVE_ROBBER", "tile_id": str(tile_id), "victim_id": victim_id.value if victim_id is not None else None}
+
+    def can_play_development_card(self, player_id: PlayerId, card_type) -> bool:
+        """Check whether a development card can be played."""
+        player = self.game_state.get_player(player_id)
+        if player is None:
+            return False
+        card = self._coerce_development_card(card_type)
+        if card == DevelopmentCardType.VICTORY_POINT:
+            return False
+        return player.development_cards.get(card, 0) > 0
+
+    def play_development_card(self, player_id: PlayerId, card_type, **kwargs):
+        """Execute a development card effect for the given player."""
+        player = self.game_state.get_player(player_id)
+        if player is None:
+            raise ValueError(f"Unknown player {player_id}.")
+
+        card = self._coerce_development_card(card_type)
+        if not self.can_play_development_card(player_id, card):
+            raise ValueError(f"Player {player_id} does not own a {card.value} development card.")
+
+        player.development_cards[card] -= 1
+        player.played_development_cards.add(card)
+
+        if card == DevelopmentCardType.KNIGHT:
+            player.largest_army_count += 1
+            if player.largest_army_count >= 3:
+                player.has_largest_army = True
+            tile_id = kwargs.get("tile_id")
+            victim_id = kwargs.get("victim_id")
+            if tile_id is not None:
+                self.move_robber(tile_id, victim_id=victim_id, player_id=player_id)
+            self.event_bus.publish(
+                GameEvent(
+                    "KnightPlayed",
+                    data={"player_id": player_id.value, "knights_played": player.largest_army_count},
+                    game_id=self.game_state.game_id,
+                    turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                    player_id=player_id,
+                    visibility="PUBLIC",
+                )
+            )
+            return {"type": "PLAY_KNIGHT", "tile_id": str(tile_id) if tile_id is not None else None}
+
+        if card == DevelopmentCardType.ROAD_BUILDING:
+            road_edges = kwargs.get("road_edges") or []
+            placed = []
+            for edge_id in road_edges[:2]:
+                try:
+                    self._place_road(player_id, edge_id)
+                    placed.append(str(edge_id))
+                except ValueError:
+                    break
+            self.event_bus.publish(
+                GameEvent(
+                    "RoadBuildingPlayed",
+                    data={"player_id": player_id.value, "edges": placed},
+                    game_id=self.game_state.game_id,
+                    turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                    player_id=player_id,
+                    visibility="PUBLIC",
+                )
+            )
+            return {"type": "PLAY_ROAD_BUILDING", "edges": placed}
+
+        if card == DevelopmentCardType.YEAR_OF_PLENTY:
+            resource_choices = self._normalize_resource_dict(kwargs.get("resources") or kwargs.get("resource_types"))
+            if len(resource_choices) != 2:
+                raise ValueError("Year of Plenty requires exactly two resource choices.")
+            for resource_type, count in resource_choices.items():
+                if count < 1:
+                    continue
+                if self.game_state.bank_state is None:
+                    raise ValueError("Bank is not initialized.")
+                if self.game_state.bank_state.resources.get(resource_type, 0) < count:
+                    raise ValueError(f"Bank does not have enough {resource_type.value} for Year of Plenty.")
+                self.game_state.bank_state.resources[resource_type] -= count
+                player.resources[resource_type] += count
+            self.event_bus.publish(
+                GameEvent(
+                    "YearOfPlentyPlayed",
+                    data={"player_id": player_id.value, "resources": {r.value: c for r, c in resource_choices.items()}},
+                    game_id=self.game_state.game_id,
+                    turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                    player_id=player_id,
+                    visibility="PUBLIC",
+                )
+            )
+            return {"type": "PLAY_YEAR_OF_PLENTY", "resources": {r.value: c for r, c in resource_choices.items()}}
+
+        if card == DevelopmentCardType.MONOPOLY:
+            resource_type = self._coerce_resource_type(kwargs.get("resource_type"))
+            monopolized = 0
+            for opp_id in PlayerId.all_players():
+                if opp_id == player_id:
+                    continue
+                opp_player = self.game_state.get_player(opp_id)
+                if opp_player is None:
+                    continue
+                amount = opp_player.resources.get(resource_type, 0)
+                if amount > 0:
+                    opp_player.resources[resource_type] = 0
+                    player.resources[resource_type] += amount
+                    monopolized += amount
+            self.event_bus.publish(
+                GameEvent(
+                    "MonopolyPlayed",
+                    data={"player_id": player_id.value, "resource": resource_type.value, "amount": monopolized},
+                    game_id=self.game_state.game_id,
+                    turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                    player_id=player_id,
+                    visibility="PUBLIC",
+                )
+            )
+            return {"type": "PLAY_MONOPOLY", "resource": resource_type.value, "amount": monopolized}
+
+        raise ValueError(f"Development card {card.value} cannot be played.")
+
+    def can_bank_trade(self, player_id: PlayerId, give_resource, receive_resource, ratio: int = 4) -> bool:
+        """Check whether a 4:1 or custom bank trade is legal."""
+        player = self.game_state.get_player(player_id)
+        if player is None or self.game_state.bank_state is None:
+            return False
+        give_type = self._coerce_resource_type(give_resource)
+        receive_type = self._coerce_resource_type(receive_resource)
+        return player.resources.get(give_type, 0) >= ratio and self.game_state.bank_state.resources.get(receive_type, 0) > 0
+
+    def bank_trade(self, player_id: PlayerId, give_resource, receive_resource, ratio: int = 4) -> dict:
+        """Execute an atomic bank trade."""
+        if not self.can_bank_trade(player_id, give_resource, receive_resource, ratio):
+            raise ValueError(f"Bank trade is not legal for {player_id}.")
+        player = self.game_state.get_player(player_id)
+        if player is None or self.game_state.bank_state is None:
+            raise ValueError(f"Unknown player {player_id}.")
+
+        give_type = self._coerce_resource_type(give_resource)
+        receive_type = self._coerce_resource_type(receive_resource)
+        player.resources[give_type] -= ratio
+        self.game_state.bank_state.resources[give_type] += ratio
+        player.resources[receive_type] += 1
+        self.game_state.bank_state.resources[receive_type] -= 1
+
+        self.event_bus.publish(
+            GameEvent(
+                "BankTradeCompleted",
+                data={
+                    "player_id": player_id.value,
+                    "give": {give_type.value: ratio},
+                    "receive": {receive_type.value: 1},
+                },
+                game_id=self.game_state.game_id,
+                turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                player_id=player_id,
+                visibility="PUBLIC",
+            )
+        )
+        return {"type": "BANK_TRADE", "give": {give_type.value: ratio}, "receive": {receive_type.value: 1}}
+
+    def player_trade(self, proposer_id: PlayerId, responder_id: PlayerId, give: Dict[ResourceType, int], receive: Dict[ResourceType, int]) -> dict:
+        """Execute an atomic direct trade between two players."""
+        proposer = self.game_state.get_player(proposer_id)
+        responder = self.game_state.get_player(responder_id)
+        if proposer is None or responder is None:
+            raise ValueError("Trade requires both players to exist.")
+
+        give_map = self._normalize_resource_dict(give)
+        receive_map = self._normalize_resource_dict(receive)
+
+        if not self._player_has_resources(proposer, give_map):
+            raise ValueError(f"Proposer {proposer_id} cannot complete the requested offer.")
+        if not self._player_has_resources(responder, receive_map):
+            raise ValueError(f"Responder {responder_id} cannot complete the requested counter-offer.")
+
+        for resource_type, amount in give_map.items():
+            proposer.resources[resource_type] -= amount
+            responder.resources[resource_type] += amount
+        for resource_type, amount in receive_map.items():
+            responder.resources[resource_type] -= amount
+            proposer.resources[resource_type] += amount
+
+        self.event_bus.publish(
+            GameEvent(
+                "TradeCompleted",
+                data={
+                    "proposer_id": proposer_id.value,
+                    "responder_id": responder_id.value,
+                    "give": {r.value: a for r, a in give_map.items()},
+                    "receive": {r.value: a for r, a in receive_map.items()},
+                },
+                game_id=self.game_state.game_id,
+                turn_number=self.game_state.turn_state.turn_number if self.game_state.turn_state else 0,
+                player_id=proposer_id,
+                visibility="PUBLIC",
+            )
+        )
+        return {"type": "TRADE", "proposer_id": proposer_id.value, "responder_id": responder_id.value, "give": give_map, "receive": receive_map}
 
     def buy_development_card(self, player_id: PlayerId):
         """Buy one development card for the specified player, drawing from the seeded deck."""
@@ -483,6 +816,48 @@ class Simulator:
 
         if action_name == "BUY_DEVELOPMENT_CARD":
             return self.buy_development_card(player_id)
+
+        if action_name == "PLAY_KNIGHT":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.play_development_card(
+                player_id,
+                DevelopmentCardType.KNIGHT,
+                tile_id=action_payload.get("tile_id"),
+                victim_id=action_payload.get("victim_id"),
+            )
+
+        if action_name == "PLAY_ROAD_BUILDING":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.play_development_card(player_id, DevelopmentCardType.ROAD_BUILDING, road_edges=action_payload.get("road_edges", []))
+
+        if action_name == "PLAY_YEAR_OF_PLENTY":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.play_development_card(player_id, DevelopmentCardType.YEAR_OF_PLENTY, resources=action_payload.get("resources"))
+
+        if action_name == "PLAY_MONOPOLY":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.play_development_card(player_id, DevelopmentCardType.MONOPOLY, resource_type=action_payload.get("resource"))
+
+        if action_name == "MOVE_ROBBER":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.move_robber(
+                action_payload.get("tile_id"),
+                victim_id=action_payload.get("victim_id"),
+                player_id=player_id,
+            )
+
+        if action_name == "BANK_TRADE":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.bank_trade(
+                player_id,
+                action_payload.get("give_resource"),
+                action_payload.get("receive_resource"),
+                ratio=action_payload.get("ratio", 4),
+            )
+
+        if action_name == "TRADE":
+            action_payload = action if isinstance(action, dict) else {}
+            return self.player_trade(player_id, action_payload.get("to_player"), action_payload.get("give", {}), action_payload.get("receive", {}))
 
         if action_name == "END_TURN":
             self.end_turn()
