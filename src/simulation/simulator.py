@@ -421,3 +421,71 @@ class Simulator:
         )
 
         return card
+
+    def execute_action(self, player_id: PlayerId, action: object) -> object:
+        """Execute one legal action for a player and mutate the authoritative game state."""
+        action_name = action.get("type") if isinstance(action, dict) else action
+        if action_name == "BUILD_SETTLEMENT":
+            vertex_id = action.get("vertex") if isinstance(action, dict) else None
+            if vertex_id is None:
+                raise ValueError("BUILD_SETTLEMENT action requires a vertex")
+            if not self.can_build_settlement(player_id, vertex_id):
+                raise ValueError(f"Settlement is not legal at {vertex_id}.")
+            player = self.game_state.get_player(player_id)
+            if player is None:
+                raise ValueError(f"Unknown player {player_id}.")
+            for resource_type, amount in {
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WOOD: 1,
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.BRICK: 1,
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.SHEEP: 1,
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 1,
+            }.items():
+                player.resources[resource_type] -= amount
+            self.game_state.board_state.vertices[vertex_id] = VertexState(str(vertex_id), Building.settlement(player_id))
+            player.settlements.add(vertex_id)
+            player.settlements_remaining = max(0, player.settlements_remaining - 1)
+            return {"type": "BUILD_SETTLEMENT", "vertex": str(vertex_id)}
+
+        if action_name == "BUILD_ROAD":
+            edge_id = action.get("edge") if isinstance(action, dict) else None
+            if edge_id is None:
+                raise ValueError("BUILD_ROAD action requires an edge")
+            if not self.can_build_road(player_id, edge_id):
+                raise ValueError(f"Road is not legal on {edge_id}.")
+            player = self.game_state.get_player(player_id)
+            for resource_type, amount in {
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WOOD: 1,
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.BRICK: 1,
+            }.items():
+                player.resources[resource_type] -= amount
+            self.game_state.board_state.edges[edge_id] = EdgeState(str(edge_id), Road(owner=player_id))
+            player.roads.add(edge_id)
+            player.roads_remaining = max(0, player.roads_remaining - 1)
+            return {"type": "BUILD_ROAD", "edge": str(edge_id)}
+
+        if action_name == "BUILD_CITY":
+            vertex_id = action.get("vertex") if isinstance(action, dict) else None
+            if vertex_id is None:
+                raise ValueError("BUILD_CITY action requires a vertex")
+            if not self.can_build_city(player_id, vertex_id):
+                raise ValueError(f"City is not legal at {vertex_id}.")
+            player = self.game_state.get_player(player_id)
+            for resource_type, amount in {
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.WHEAT: 2,
+                __import__("src.simulator.types.resource", fromlist=["ResourceType"]).ResourceType.ORE: 3,
+            }.items():
+                player.resources[resource_type] -= amount
+            self.game_state.board_state.vertices[vertex_id].building = Building.city(player_id)
+            player.settlements.discard(vertex_id)
+            player.cities.add(vertex_id)
+            player.cities_remaining = max(0, player.cities_remaining - 1)
+            return {"type": "BUILD_CITY", "vertex": str(vertex_id)}
+
+        if action_name == "BUY_DEVELOPMENT_CARD":
+            return self.buy_development_card(player_id)
+
+        if action_name == "END_TURN":
+            self.end_turn()
+            return {"type": "END_TURN"}
+
+        raise ValueError(f"Unsupported action: {action_name}")
