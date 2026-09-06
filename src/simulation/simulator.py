@@ -198,6 +198,103 @@ class Simulator:
         self.game_state.status = GameStatus.ACTIVE
         return self.game_state
 
+    def _resolve_roll(self, total: int) -> None:
+        """Distribute resources for a successful roll and update turn state."""
+        if total == 7:
+            self.game_state.turn_state.phase = "PLAYING"
+            return
+
+        board_state = self.game_state.board_state
+        if board_state is None:
+            return
+
+        for player in self.game_state.players:
+            for tile_id, tile_state in board_state.tiles.items():
+                if tile_state.number_token != total or tile_state.has_robber:
+                    continue
+                for vertex_id in self.board_geometry.get_tile(tile_id).vertex_ids:
+                    vertex_state = board_state.get_vertex(vertex_id)
+                    if vertex_state is None or vertex_state.building.is_empty():
+                        continue
+                    owner = vertex_state.building.owner
+                    if owner is None:
+                        continue
+                    if owner == player.player_id:
+                        resource_type = tile_state.resource_type
+                        if resource_type is not None:
+                            player.resources[resource_type] += 1
+                            if vertex_state.building.type and vertex_state.building.type.value == "CITY":
+                                player.resources[resource_type] += 1
+
+        self.game_state.turn_state.phase = "PLAYING"
+
+    def roll_dice(self) -> int:
+        """Roll the dice for the current player and publish the public event."""
+        die1 = self.rng.randint(1, 6)
+        die2 = self.rng.randint(1, 6)
+        total = die1 + die2
+        self.game_state.turn_state.dice_roll = total
+        self.game_state.turn_state.phase = "ROLLED"
+
+        self.event_bus.publish(
+            GameEvent(
+                "DiceRolled",
+                data={"die1": die1, "die2": die2, "total": total},
+                game_id=self.game_state.game_id,
+                turn_number=self.game_state.turn_state.turn_number,
+                player_id=self.game_state.turn_state.current_player,
+                visibility="PUBLIC",
+            )
+        )
+
+        self._resolve_roll(total)
+        return total
+
+    def end_turn(self) -> None:
+        """Advance to the next player and reset turn-phase markers."""
+        player_order = PlayerId.all_players()
+        current_index = player_order.index(self.game_state.turn_state.current_player)
+        next_player = player_order[(current_index + 1) % len(player_order)]
+        self.game_state.turn_state.current_player = next_player
+        self.game_state.turn_state.turn_number += 1
+        self.game_state.turn_state.phase = "PRE_ROLL"
+        self.game_state.turn_state.dice_roll = None
+
+    def take_turn_for_current_player(self) -> None:
+        """Advance the current player through the basic pre-roll and end-turn flow."""
+        current_player = self.game_state.turn_state.current_player
+        bot = self.bot_manager.get_bot(current_player)
+
+        if self.game_state.turn_state.phase == "PRE_ROLL":
+            action = bot.take_turn(self.build_view_for_player(current_player), ["ROLL"])
+            if isinstance(action, dict):
+                action_name = action.get("type", "ROLL")
+            else:
+                action_name = action
+
+            if action_name not in ("ROLL", "END_TURN"):
+                action_name = "ROLL"
+
+            if action_name == "ROLL":
+                self.roll_dice()
+                action = bot.take_turn(self.build_view_for_player(current_player), ["END_TURN"])
+                if isinstance(action, dict):
+                    action_name = action.get("type", "END_TURN")
+                else:
+                    action_name = action
+                if action_name != "END_TURN":
+                    action_name = "END_TURN"
+            self.end_turn()
+            return
+
+        action = bot.take_turn(self.build_view_for_player(current_player), ["END_TURN"])
+        if isinstance(action, dict):
+            action_name = action.get("type", "END_TURN")
+        else:
+            action_name = action
+        if action_name == "END_TURN":
+            self.end_turn()
+
     def run(self) -> None:
         """Execute a complete game."""
         if len(self.bot_manager.bots) != 4:
@@ -205,3 +302,6 @@ class Simulator:
 
         self.start_game()
         self.perform_setup()
+
+        for _ in range(8):
+            self.take_turn_for_current_player()
