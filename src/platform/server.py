@@ -21,11 +21,13 @@ from .bot_runner import BotRunner
 from .room_service import RoomService
 from .ui import UI_HTML
 from .bot_registry import BotRegistry
+from .game_service import GameService
 
 
 app = FastAPI()
 room_service = RoomService()
 bot_registry = BotRegistry()
+game_service = GameService()
 _active_threads: Set[asyncio.Task] = set()
 
 
@@ -97,6 +99,18 @@ def _start_simulator_task(sim: Simulator, game_id: str):
     return task
 
 
+def _ensure_unique_game_id(base_game_id: str) -> str:
+    """Return a unique game id for the platform even when the simulator seed repeats."""
+    if base_game_id not in games:
+        return base_game_id
+    suffix = 2
+    candidate = f"{base_game_id}-{suffix}"
+    while candidate in games:
+        suffix += 1
+        candidate = f"{base_game_id}-{suffix}"
+    return candidate
+
+
 @app.post("/game/create")
 async def create_game(seed: int = 42):
     """Create and start a simulator instance for development/demo.
@@ -104,18 +118,31 @@ async def create_game(seed: int = 42):
     Returns the `game_id` which can be used to query state/replay or connect via WebSocket.
     """
     sim = _build_simulator(seed=seed)
-    game_id = sim.game_state.game_id
+    base_game_id = sim.game_state.game_id
+    game_id = _ensure_unique_game_id(base_game_id)
+    if game_id != base_game_id:
+        sim.game_state.game_id = game_id
+        sim.replay_recorder.metadata["game_id"] = game_id
     if game_id in games:
         raise HTTPException(status_code=400, detail="Game already exists")
 
+    game_service.create_game(game_id, seed=seed, players=[p.value for p in PlayerId.all_players()])
     games[game_id] = {"sim": sim, "subscribers": set(), "task": None}
     _start_simulator_task(sim, game_id)
     return {"game_id": game_id}
 
 
-@app.get("/rooms")
-async def list_rooms():
-    return {"rooms": room_service.list_rooms()}
+@app.get("/games")
+async def list_games():
+    return {"games": [game.to_dict() for game in game_service.list_games()]}
+
+
+@app.get("/games/{game_id}")
+async def get_game_metadata(game_id: str):
+    game = game_service.get_game(game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game.to_dict()
 
 
 @app.post("/rooms")
@@ -156,9 +183,11 @@ async def start_room_game(room_id: str, seed: int = 42):
         raise HTTPException(status_code=400, detail="Room is not ready to start")
 
     player_mapping: Dict[PlayerId, object] = {}
+    players = []
     for idx, seat in enumerate(room.seats):
         if seat.player_name is None:
             continue
+        players.append(seat.player_name)
         player_id = PlayerId.all_players()[idx]
         if seat.bot_runner is not None:
             player_mapping[player_id] = seat.bot_runner
@@ -166,7 +195,12 @@ async def start_room_game(room_id: str, seed: int = 42):
             player_mapping[player_id] = DummyBot()
 
     sim = _build_simulator(seed=seed, bot_map=player_mapping)
-    game_id = sim.game_state.game_id
+    base_game_id = sim.game_state.game_id
+    game_id = _ensure_unique_game_id(base_game_id)
+    if game_id != base_game_id:
+        sim.game_state.game_id = game_id
+        sim.replay_recorder.metadata["game_id"] = game_id
+    game_service.create_game(game_id, room_id=room_id, seed=seed, players=players)
     games[game_id] = {"sim": sim, "subscribers": set(), "task": None}
     _start_simulator_task(sim, game_id)
     room.status = "playing"

@@ -87,3 +87,18 @@ def test_list_and_upload_bot_registry():
     )
     assert invalid.status_code == 200
     assert invalid.json()["validated"] is False
+
+
+def test_game_metadata_endpoints():
+    create_response = client.post("/game/create", params={"seed": 123})
+    assert create_response.status_code == 200
+    game_id = create_response.json()["game_id"]
+
+    list_response = client.get("/games")
+    assert list_response.status_code == 200
+    assert any(item["game_id"] == game_id for item in list_response.json()["games"])
+
+    detail_response = client.get(f"/games/{game_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["game_id"] == game_id
+    assert detail_response.json()["seed"] == 123
