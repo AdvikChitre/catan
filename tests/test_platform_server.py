@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from src.platform.server import app
 
+print([(list(r.methods), r.path) for r in app.routes if hasattr(r, 'methods')])
 
 client = TestClient(app)
 
@@ -35,3 +36,24 @@ def test_replay_route_for_created_game():
     assert replay_response.status_code == 200
     replay = replay_response.json()
     assert "metadata" in replay and "events" in replay
+
+
+def test_room_can_start_game_when_ready():
+    create_room = client.post("/rooms", params={"room_name": "Lobby A", "created_by": "Alice"})
+    room_id = create_room.json()["room"]["room_id"]
+
+    for player in ["Bob", "Carol", "Dave"]:
+        room_join = client.post(f"/rooms/{room_id}/join", params={"player_name": player})
+        assert room_join.status_code == 200
+
+    for player in ["Alice", "Bob", "Carol", "Dave"]:
+        ready = client.post(f"/rooms/{room_id}/ready", params={"player_name": player, "ready": True})
+        assert ready.status_code == 200
+
+    for player in ["Alice", "Bob", "Carol", "Dave"]:
+        attach = client.post(f"/rooms/{room_id}/attach-bot", params={"player_name": player, "bot_name": f"bot-{player.lower()}"})
+        assert attach.status_code == 200
+
+    started = client.post(f"/rooms/{room_id}/start-game", params={"seed": 123})
+    assert started.status_code == 200
+    assert "game_id" in started.json()

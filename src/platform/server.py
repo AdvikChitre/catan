@@ -6,8 +6,8 @@ connected WebSocket clients.
 """
 from __future__ import annotations
 
+import atexit
 import asyncio
-import threading
 from typing import Dict, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -17,24 +17,37 @@ from ..simulation import Simulator
 from ..web_transport.server import get_replay, get_state
 from ..simulator.run import DummyBot
 from ..simulator.types.identifiers import PlayerId
+from .bot_runner import BotRunner
+from .room_service import RoomService
 from .ui import UI_HTML
 
 
 app = FastAPI()
+room_service = RoomService()
+_active_threads: Set[asyncio.Task] = set()
+
+
+def _build_simulator(seed: int = 42, bot_map: Dict[PlayerId, object] | None = None) -> Simulator:
+    sim = Simulator(seed=seed)
+    if bot_map is None:
+        bot_map = {
+            PlayerId.P1: DummyBot(),
+            PlayerId.P2: DummyBot(),
+            PlayerId.P3: DummyBot(),
+            PlayerId.P4: DummyBot(),
+        }
+    sim.register_bots(bot_map)
+    return sim
+
 
 # In-memory game registry for demo purposes: { game_id: {sim, thread, subscribers:set} }
 games: Dict[str, Dict] = {}
 
 
-def _start_simulator_in_thread(sim: Simulator, loop: asyncio.AbstractEventLoop, game_id: str) -> threading.Thread:
-    """Start simulator.run() in a background thread and forward events to the ASGI loop.
-
-    The simulator's EventBus will call the subscribed callback from the simulator thread;
-    the callback uses `loop.call_soon_threadsafe` to schedule async broadcasts.
-    """
+def _start_simulator_task(sim: Simulator, game_id: str):
+    """Start simulator.run() as an asyncio task on the current event loop."""
 
     async def broadcast(event):
-        # runs in the event loop
         subs: Set[WebSocket] = games[game_id]["subscribers"].copy()
         payload = {
             "sequence": event.sequence_number,
@@ -55,33 +68,6 @@ def _start_simulator_in_thread(sim: Simulator, loop: asyncio.AbstractEventLoop, 
                     pass
                 games[game_id]["subscribers"].discard(ws)
 
-    def on_event(event):
-        # schedule broadcast in the asyncio event loop
-        try:
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(broadcast(event), loop)
-        except RuntimeError:
-            # loop closed or unavailable
-            pass
-
-    sim.event_bus.subscribe(on_event, player_id=None)
-
-    def runner():
-        try:
-            sim.run()
-        finally:
-            # notify clients that the simulator finished
-            try:
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(broadcast_type_completion(game_id), loop)
-            except Exception:
-                pass
-
-    def start_thread():
-        t = threading.Thread(target=runner, daemon=True)
-        t.start()
-        return t
-
     async def broadcast_type_completion(gid: str):
         subs = games[gid]["subscribers"].copy()
         payload = {"type": "SIMULATOR_COMPLETED", "game_id": gid}
@@ -91,7 +77,22 @@ def _start_simulator_in_thread(sim: Simulator, loop: asyncio.AbstractEventLoop, 
             except Exception:
                 pass
 
-    return start_thread()
+    async def runner():
+        try:
+            sim.run()
+        finally:
+            await broadcast_type_completion(game_id)
+            games[game_id]["task"] = None
+            _active_threads.discard(task)
+
+    def on_event(event):
+        asyncio.create_task(broadcast(event))
+
+    sim.event_bus.subscribe(on_event, player_id=None)
+    task = asyncio.create_task(runner())
+    games[game_id]["task"] = task
+    _active_threads.add(task)
+    return task
 
 
 @app.post("/game/create")
@@ -100,27 +101,74 @@ async def create_game(seed: int = 42):
 
     Returns the `game_id` which can be used to query state/replay or connect via WebSocket.
     """
-    sim = Simulator(seed=seed)
-    # register four DummyBots for now
-    bots = {
-        PlayerId.P1: DummyBot(),
-        PlayerId.P2: DummyBot(),
-        PlayerId.P3: DummyBot(),
-        PlayerId.P4: DummyBot(),
-    }
-    sim.register_bots(bots)
-
+    sim = _build_simulator(seed=seed)
     game_id = sim.game_state.game_id
     if game_id in games:
         raise HTTPException(status_code=400, detail="Game already exists")
 
-    loop = asyncio.get_event_loop()
-
-    games[game_id] = {"sim": sim, "subscribers": set(), "thread": None}
-    t = _start_simulator_in_thread(sim, loop, game_id)
-    games[game_id]["thread"] = t
-
+    games[game_id] = {"sim": sim, "subscribers": set(), "task": None}
+    _start_simulator_task(sim, game_id)
     return {"game_id": game_id}
+
+
+@app.get("/rooms")
+async def list_rooms():
+    return {"rooms": room_service.list_rooms()}
+
+
+@app.post("/rooms")
+async def create_room(room_name: str = "Demo Room", created_by: str = "player-1"):
+    room = room_service.create_room(room_name, created_by)
+    return {"room": {"room_id": room.room_id, "name": room.name, "created_by": room.created_by, "seats": [
+        {"player_name": seat.player_name, "ready": seat.ready} for seat in room.seats
+    ]}}
+
+
+@app.post("/rooms/{room_id}/join")
+async def join_room(room_id: str, player_name: str):
+    room = room_service.join_room(room_id, player_name)
+    return {"room_id": room.room_id, "player_name": player_name, "seats": [
+        {"player_name": seat.player_name, "ready": seat.ready} for seat in room.seats
+    ]}
+
+
+@app.post("/rooms/{room_id}/ready")
+async def set_room_ready(room_id: str, player_name: str, ready: bool = True):
+    room = room_service.set_ready(room_id, player_name, ready)
+    return {"room_id": room.room_id, "player_name": player_name, "ready": ready}
+
+
+@app.post("/rooms/{room_id}/attach-bot")
+async def attach_bot(room_id: str, player_name: str, bot_name: str = "demo-bot", bot_version: str = "v1"):
+    room = room_service.get_room(room_id)
+    bot = BotRunner(bot_id=f"{player_name}-{bot_name}", name=bot_name, version=bot_version)
+    bot.validate()
+    room_service.attach_bot(room_id, player_name, bot)
+    return {"room_id": room_id, "player_name": player_name, "bot_id": bot.bot_id, "status": bot.status}
+
+
+@app.post("/rooms/{room_id}/start-game")
+async def start_room_game(room_id: str, seed: int = 42):
+    room = room_service.get_room(room_id)
+    if not room_service.can_start_game(room_id):
+        raise HTTPException(status_code=400, detail="Room is not ready to start")
+
+    player_mapping: Dict[PlayerId, object] = {}
+    for idx, seat in enumerate(room.seats):
+        if seat.player_name is None:
+            continue
+        player_id = PlayerId.all_players()[idx]
+        if seat.bot_runner is not None:
+            player_mapping[player_id] = seat.bot_runner
+        else:
+            player_mapping[player_id] = DummyBot()
+
+    sim = _build_simulator(seed=seed, bot_map=player_mapping)
+    game_id = sim.game_state.game_id
+    games[game_id] = {"sim": sim, "subscribers": set(), "task": None}
+    _start_simulator_task(sim, game_id)
+    room.status = "playing"
+    return {"game_id": game_id, "room_id": room_id}
 
 
 @app.get("/game/{game_id}/replay")
@@ -176,3 +224,14 @@ async def index():
 @app.get("/ui")
 async def ui_page():
     return HTMLResponse(UI_HTML)
+
+
+def _shutdown_active_threads() -> None:
+    """Ensure all simulator worker threads exit before interpreter shutdown."""
+    for task in list(_active_threads):
+        if not task.done():
+            task.cancel()
+    _active_threads.clear()
+
+
+atexit.register(_shutdown_active_threads)
