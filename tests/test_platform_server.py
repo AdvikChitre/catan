@@ -57,3 +57,33 @@ def test_room_can_start_game_when_ready():
     started = client.post(f"/rooms/{room_id}/start-game", params={"seed": 123})
     assert started.status_code == 200
     assert "game_id" in started.json()
+
+
+def test_list_and_upload_bot_registry():
+    list_response = client.get("/bots")
+    assert list_response.status_code == 200
+
+    upload_response = client.post(
+        "/bots/upload",
+        params={
+            "bot_name": "alpha",
+            "bot_version": "v1",
+            "entrypoint": "main.py",
+            "description": "first bot version",
+        },
+    )
+    assert upload_response.status_code == 200
+    body = upload_response.json()
+    assert body["validated"] is True
+    assert body["bot_id"] == "alpha-v1"
+
+    detail = client.get("/bots/alpha-v1")
+    assert detail.status_code == 200
+    assert detail.json()["version"] == "v1"
+
+    invalid = client.post(
+        "/bots/upload",
+        params={"bot_name": "", "bot_version": "v2", "entrypoint": "main.py"},
+    )
+    assert invalid.status_code == 200
+    assert invalid.json()["validated"] is False

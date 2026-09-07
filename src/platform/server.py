@@ -20,10 +20,12 @@ from ..simulator.types.identifiers import PlayerId
 from .bot_runner import BotRunner
 from .room_service import RoomService
 from .ui import UI_HTML
+from .bot_registry import BotRegistry
 
 
 app = FastAPI()
 room_service = RoomService()
+bot_registry = BotRegistry()
 _active_threads: Set[asyncio.Task] = set()
 
 
@@ -224,6 +226,40 @@ async def index():
 @app.get("/ui")
 async def ui_page():
     return HTMLResponse(UI_HTML)
+
+
+@app.get("/bots")
+async def list_bots():
+    return {"bots": bot_registry.list_bots()}
+
+
+@app.post("/bots/upload")
+async def upload_bot(bot_name: str, bot_version: str, entrypoint: str = "main.py", description: str = ""):
+    package = bot_registry.register(bot_name, bot_version, entrypoint=entrypoint, description=description)
+    return {
+        "bot_id": package.bot_id,
+        "name": package.name,
+        "version": package.version,
+        "entrypoint": package.entrypoint,
+        "validated": package.validated,
+        "validation_errors": package.validation_errors,
+    }
+
+
+@app.get("/bots/{bot_id}")
+async def get_bot(bot_id: str):
+    package = bot_registry.get_bot(bot_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return {
+        "bot_id": package.bot_id,
+        "name": package.name,
+        "version": package.version,
+        "entrypoint": package.entrypoint,
+        "description": package.description,
+        "validated": package.validated,
+        "validation_errors": package.validation_errors,
+    }
 
 
 def _shutdown_active_threads() -> None:

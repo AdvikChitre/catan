@@ -25,3 +25,16 @@ Open http://localhost:8000/ui to view a mock board and event feed.
 curl -X POST http://localhost:8000/game/create
 curl http://localhost:8000/game/<game_id>/replay
 ```
+
+### Bot registry
+
+The platform includes a lightweight in-memory bot registry for uploaded bot versions.
+
+- `GET /bots` lists all registered bot versions
+- `POST /bots/upload?bot_name=alpha&bot_version=v1&entrypoint=main.py` creates and validates a bot package
+- `GET /bots/{bot_id}` fetches a specific version
+
+Example:
+```powershell
+curl "http://localhost:8000/bots/upload?bot_name=alpha&bot_version=v1&entrypoint=main.py&description=first+bot"
+```
