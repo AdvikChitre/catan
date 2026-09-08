@@ -1,12 +1,30 @@
 """Tests for the platform adapter."""
 
+import os
+import tempfile
 from fastapi.testclient import TestClient
+
+# Use a temporary database for testing
+test_db_path = tempfile.mktemp(suffix=".db")
+os.environ["CATAN_DB_URL"] = f"sqlite:///{test_db_path}"
 
 from src.platform.server import app
 
 print([(list(r.methods), r.path) for r in app.routes if hasattr(r, 'methods')])
 
 client = TestClient(app)
+
+def cleanup_test_db():
+    """Clean up test database after tests."""
+    if os.path.exists(test_db_path):
+        try:
+            os.remove(test_db_path)
+        except Exception:
+            pass
+
+# Run cleanup at module exit
+import atexit
+atexit.register(cleanup_test_db)
 
 
 def test_create_game_returns_game_id():
@@ -65,11 +83,12 @@ def test_list_and_upload_bot_registry():
 
     upload_response = client.post(
         "/bots/upload",
-        params={
+        json={
             "bot_name": "alpha",
             "bot_version": "v1",
             "entrypoint": "main.py",
             "description": "first bot version",
+            "use_sandbox": False,
         },
     )
     assert upload_response.status_code == 200
@@ -83,10 +102,37 @@ def test_list_and_upload_bot_registry():
 
     invalid = client.post(
         "/bots/upload",
-        params={"bot_name": "", "bot_version": "v2", "entrypoint": "main.py"},
+        json={"bot_name": "", "bot_version": "v2", "entrypoint": "main.py", "use_sandbox": False},
     )
     assert invalid.status_code == 200
     assert invalid.json()["validated"] is False
+
+
+def test_upload_sandboxed_bot():
+    """Test uploading a sandboxed bot with code."""
+    bot_code = """
+def on_game_start(view):
+    return {"status": "ready"}
+
+def take_turn(view, available_actions):
+    return available_actions[0] if available_actions else None
+"""
+    upload_response = client.post(
+        "/bots/upload",
+        json={
+            "bot_name": "sandboxed-bot",
+            "bot_version": "v1",
+            "entrypoint": "main.py",
+            "description": "A sandboxed bot",
+            "use_sandbox": True,
+            "bot_code": bot_code,
+        }
+    )
+    assert upload_response.status_code == 200
+    body = upload_response.json()
+    assert body["validated"] is True
+    assert body["bot_id"] == "sandboxed-bot-v1"
+    assert body["use_sandbox"] is True
 
 
 def test_game_metadata_endpoints():

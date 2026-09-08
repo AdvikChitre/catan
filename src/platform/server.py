@@ -8,10 +8,25 @@ from __future__ import annotations
 
 import atexit
 import asyncio
+import os
 from typing import Dict, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+
+
+class BotUploadRequest(BaseModel):
+    bot_name: str
+    bot_version: str
+    entrypoint: str = "main.py"
+    description: str = ""
+    bot_code: str = ""
+    use_sandbox: bool = False
+
+
+# Get database URL from environment or use default
+DATABASE_URL = os.getenv("CATAN_DB_URL", "sqlite:///catan_platform.db")
 
 from ..simulation import Simulator
 from ..web_transport.server import get_replay, get_state
@@ -25,9 +40,9 @@ from .game_service import GameService
 
 
 app = FastAPI()
-room_service = RoomService()
-bot_registry = BotRegistry()
-game_service = GameService()
+room_service = RoomService(use_database=True, database_url=DATABASE_URL)
+bot_registry = BotRegistry(use_database=True, database_url=DATABASE_URL)
+game_service = GameService(use_database=True, database_url=DATABASE_URL)
 _active_threads: Set[asyncio.Task] = set()
 
 
@@ -170,7 +185,25 @@ async def set_room_ready(room_id: str, player_name: str, ready: bool = True):
 @app.post("/rooms/{room_id}/attach-bot")
 async def attach_bot(room_id: str, player_name: str, bot_name: str = "demo-bot", bot_version: str = "v1"):
     room = room_service.get_room(room_id)
-    bot = BotRunner(bot_id=f"{player_name}-{bot_name}", name=bot_name, version=bot_version)
+    
+    # Check if this is a registered bot
+    bot_id = f"{bot_name}-{bot_version}"
+    registered_bot = bot_registry.get_bot(bot_id)
+    
+    if registered_bot and registered_bot.use_sandbox and registered_bot.bot_code:
+        # Use sandboxed runner
+        bot = BotRunner(
+            bot_id=f"{player_name}-{bot_name}",
+            name=bot_name,
+            version=bot_version,
+            use_sandbox=True,
+            bot_code=registered_bot.bot_code,
+            sandbox_config=registered_bot.sandbox_config
+        )
+    else:
+        # Use regular runner
+        bot = BotRunner(bot_id=f"{player_name}-{bot_name}", name=bot_name, version=bot_version)
+    
     bot.validate()
     room_service.attach_bot(room_id, player_name, bot)
     return {"room_id": room_id, "player_name": player_name, "bot_id": bot.bot_id, "status": bot.status}
@@ -189,8 +222,32 @@ async def start_room_game(room_id: str, seed: int = 42):
             continue
         players.append(seat.player_name)
         player_id = PlayerId.all_players()[idx]
+        
+        # Handle bot_runner - could be BotRunner object or string (bot_id)
         if seat.bot_runner is not None:
-            player_mapping[player_id] = seat.bot_runner
+            if isinstance(seat.bot_runner, str):
+                # Convert bot_id string back to BotRunner by looking up in registry
+                registered_bot = bot_registry.get_bot(seat.bot_runner)
+                if registered_bot and registered_bot.use_sandbox and registered_bot.bot_code:
+                    # Reconstruct sandboxed runner
+                    bot = BotRunner(
+                        bot_id=registered_bot.bot_id,
+                        name=registered_bot.name,
+                        version=registered_bot.version,
+                        use_sandbox=True,
+                        bot_code=registered_bot.bot_code,
+                        sandbox_config=registered_bot.sandbox_config
+                    )
+                    bot.validate()
+                    player_mapping[player_id] = bot
+                else:
+                    # Fallback to DummyBot
+                    player_mapping[player_id] = DummyBot()
+            elif hasattr(seat.bot_runner, 'take_turn'):
+                # It's already a proper BotRunner object
+                player_mapping[player_id] = seat.bot_runner
+            else:
+                player_mapping[player_id] = DummyBot()
         else:
             player_mapping[player_id] = DummyBot()
 
@@ -268,8 +325,19 @@ async def list_bots():
 
 
 @app.post("/bots/upload")
-async def upload_bot(bot_name: str, bot_version: str, entrypoint: str = "main.py", description: str = ""):
-    package = bot_registry.register(bot_name, bot_version, entrypoint=entrypoint, description=description)
+async def upload_bot(request: BotUploadRequest):
+    from .sandbox import SandboxConfig
+    
+    sandbox_config = SandboxConfig() if request.use_sandbox else None
+    package = bot_registry.register(
+        request.bot_name,
+        request.bot_version,
+        entrypoint=request.entrypoint,
+        description=request.description,
+        bot_code=request.bot_code if request.use_sandbox else None,
+        use_sandbox=request.use_sandbox,
+        sandbox_config=sandbox_config
+    )
     return {
         "bot_id": package.bot_id,
         "name": package.name,
@@ -277,6 +345,7 @@ async def upload_bot(bot_name: str, bot_version: str, entrypoint: str = "main.py
         "entrypoint": package.entrypoint,
         "validated": package.validated,
         "validation_errors": package.validation_errors,
+        "use_sandbox": package.use_sandbox,
     }
 
 
