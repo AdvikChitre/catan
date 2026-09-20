@@ -1,0 +1,12 @@
+{
+  "name": "catan-replay-interface",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:playback": "node --test tests/playback.test.js",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

@@ -6,6 +6,7 @@ the in-memory services with persistent storage.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -155,7 +156,15 @@ class DatabaseManager:
     def __init__(self, database_url: str = "sqlite:///catan_platform.db"):
         self.engine = create_engine(database_url, echo=False)
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
-        self._session: Optional[Session] = None
+        self._local = threading.local()
+
+    @property
+    def _session(self) -> Optional[Session]:
+        return getattr(self._local, "session", None)
+
+    @_session.setter
+    def _session(self, session: Optional[Session]) -> None:
+        self._local.session = session
     
     def create_tables(self) -> None:
         """Create all database tables."""

@@ -305,9 +305,9 @@ class SandboxedBotRunner(BotInterface):
         """Serialize GameView for transmission to sandbox."""
         return {
             "game_id": view.game_id,
-            "turn_number": view.turn_number,
-            "current_player": view.current_player.value if view.current_player else None,
-            "phase": view.phase,
+            "turn_number": view.turn.turn_number,
+            "current_player": view.turn.current_player.value if view.turn.current_player else None,
+            "phase": view.turn.phase,
             "players": [
                 {
                     "player_id": p.player_id.value,
@@ -315,14 +315,14 @@ class SandboxedBotRunner(BotInterface):
                     "resources": {r.value: count for r, count in p.resources.items()},
                     "development_cards": len(p.development_cards)
                 }
-                for p in view.players
+                for p in [view.self, *view.opponents]
             ],
             "board": {
                 "tiles": [
                     {
                         "tile_id": t.tile_id,
                         "resource_type": t.resource_type.value if t.resource_type else None,
-                        "number": t.number
+                        "number": t.number_token
                     }
                     for t in view.board.tiles
                 ]
@@ -331,6 +331,10 @@ class SandboxedBotRunner(BotInterface):
 
     def _serialize_action(self, action: Any) -> Dict[str, Any]:
         """Serialize action for transmission to sandbox."""
+        if isinstance(action, dict):
+            return action
+        if isinstance(action, str):
+            return {"type": action}
         if hasattr(action, 'to_dict'):
             return action.to_dict()
         return {"type": str(type(action).__name__), "data": str(action)}

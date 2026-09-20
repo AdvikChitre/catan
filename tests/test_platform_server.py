@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import time
 from fastapi.testclient import TestClient
 
 # Use a temporary database for testing
@@ -13,6 +14,17 @@ from src.platform.server import app
 print([(list(r.methods), r.path) for r in app.routes if hasattr(r, 'methods')])
 
 client = TestClient(app)
+
+
+def wait_for_recording(game_id):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        metadata = client.get(f"/games/{game_id}").json()
+        if metadata.get("replay_available"):
+            return metadata
+        assert metadata["status"] != "failed", metadata
+        time.sleep(0.02)
+    raise AssertionError("Simulation did not finish")
 
 def cleanup_test_db():
     """Clean up test database after tests."""
@@ -39,6 +51,7 @@ def test_state_route_for_created_game():
     create_response = client.post("/game/create", params={"seed": 7})
     game_id = create_response.json()["game_id"]
 
+    wait_for_recording(game_id)
     state_response = client.get(f"/game/{game_id}/state")
     assert state_response.status_code == 200
     state = state_response.json()
@@ -50,6 +63,7 @@ def test_replay_route_for_created_game():
     create_response = client.post("/game/create", params={"seed": 11})
     game_id = create_response.json()["game_id"]
 
+    wait_for_recording(game_id)
     replay_response = client.get(f"/game/{game_id}/replay")
     assert replay_response.status_code == 200
     replay = replay_response.json()
@@ -61,20 +75,23 @@ def test_room_can_start_game_when_ready():
     room_id = create_room.json()["room"]["room_id"]
 
     for player in ["Bob", "Carol", "Dave"]:
-        room_join = client.post(f"/rooms/{room_id}/join", params={"player_name": player})
+        room_join = client.post(f"/rooms/{room_id}/join", json={"player_name": player})
         assert room_join.status_code == 200
 
     for player in ["Alice", "Bob", "Carol", "Dave"]:
-        ready = client.post(f"/rooms/{room_id}/ready", params={"player_name": player, "ready": True})
+        registered = client.post("/bots/upload", json={"bot_name": f"bot-{player.lower()}", "bot_version": "v1"})
+        assert registered.status_code == 200
+        attach = client.post(f"/rooms/{room_id}/attach-bot", json={"player_name": player, "bot_name": f"bot-{player.lower()}"})
+        assert attach.status_code == 200
+        ready = client.post(f"/rooms/{room_id}/ready", json={"player_name": player, "ready": True})
         assert ready.status_code == 200
 
-    for player in ["Alice", "Bob", "Carol", "Dave"]:
-        attach = client.post(f"/rooms/{room_id}/attach-bot", params={"player_name": player, "bot_name": f"bot-{player.lower()}"})
-        assert attach.status_code == 200
-
-    started = client.post(f"/rooms/{room_id}/start-game", params={"seed": 123})
+    started = client.post(f"/rooms/{room_id}/start-game", json={"seed": 123})
     assert started.status_code == 200
     assert "game_id" in started.json()
+    metadata = wait_for_recording(started.json()["game_id"])
+    assert [p["bot_id"] for p in metadata["participants"]] == [f"bot-{n}-v1" for n in ["alice", "bob", "carol", "dave"]]
+    assert client.post(f"/rooms/{room_id}/start-game", json={"seed": 123}).status_code == 400
 
 
 def test_list_and_upload_bot_registry():

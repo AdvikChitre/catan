@@ -588,13 +588,16 @@ UI_HTML = """
       }
 
       // Room Management
+      let currentRoomId = null;
+      let currentUserName = '';
+
       async function loadRooms() {
         const response = await fetch('/rooms');
         const data = await response.json();
         const roomsList = document.getElementById('roomsList');
         
         if (!data.rooms || data.rooms.length === 0) {
-          roomsList.innerHTML = '<p class="muted">No rooms available.</p>';
+          roomsList.innerHTML = '<p class="muted">No rooms available. Create one to get started!</p>';
           return;
         }
         
@@ -610,13 +613,15 @@ UI_HTML = """
             <div class="room-seats">
               ${room.seats.map(seat => `
                 <div class="seat ${seat.player_name ? 'occupied' : ''} ${seat.ready ? 'ready' : ''}">
-                  ${seat.player_name || 'Empty'}
-                  ${seat.ready ? '✓' : ''}
+                  <div>${seat.player_name || 'Empty'}</div>
+                  <div class="muted" style="font-size: 11px;">${seat.ready ? '✓ Ready' : 'Not Ready'}</div>
+                  ${seat.bot_runner ? `<div class="muted" style="font-size: 11px;">🤖 ${seat.bot_runner}</div>` : ''}
                 </div>
               `).join('')}
             </div>
             <div class="bot-actions">
               <button onclick="joinRoom('${room.room_id}')">Join</button>
+              <button class="secondary" onclick="viewRoom('${room.room_id}')">View</button>
             </div>
           </div>
         `).join('');
@@ -630,13 +635,153 @@ UI_HTML = """
         });
         const result = await response.json();
         
+        currentUserName = formData.created_by;
         document.getElementById('roomModal').classList.add('hidden');
         loadRooms();
       }
 
-      function joinRoom(roomId) {
-        // Note: Join room functionality not fully implemented
-        alert('Join room functionality not yet implemented');
+      async function joinRoom(roomId) {
+        const playerName = prompt('Enter your name:', currentUserName || 'Player');
+        if (!playerName) return;
+        
+        currentUserName = playerName;
+        
+        const response = await fetch(`/rooms/${roomId}/join`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ player_name: playerName })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          viewRoom(roomId);
+        } else {
+          alert('Failed to join room');
+        }
+      }
+
+      async function viewRoom(roomId) {
+        currentRoomId = roomId;
+        
+        // Switch to a room detail view
+        const roomsList = document.getElementById('roomsList');
+        roomsList.innerHTML = `
+          <div class="card">
+            <div class="bot-header">
+              <button class="ghost" onclick="loadRooms()">← Back to Rooms</button>
+            </div>
+            <div id="roomDetail">Loading room details...</div>
+          </div>
+        `;
+        
+        await loadRoomDetail(roomId);
+      }
+
+      async function loadRoomDetail(roomId) {
+        const response = await fetch(`/rooms`);
+        const data = await response.json();
+        const room = data.rooms.find(r => r.room_id === roomId);
+        
+        if (!room) {
+          document.getElementById('roomDetail').innerHTML = '<p class="muted">Room not found</p>';
+          return;
+        }
+        
+        const roomDetail = document.getElementById('roomDetail');
+        roomDetail.innerHTML = `
+          <h3>${room.name}</h3>
+          <div class="bot-meta">Status: ${room.status} • Created by: ${room.created_by}</div>
+          
+          <div class="room-seats" style="margin: 16px 0;">
+            ${room.seats.map((seat, index) => `
+              <div class="seat ${seat.player_name ? 'occupied' : ''} ${seat.ready ? 'ready' : ''}">
+                <div><strong>Seat ${index + 1}</strong></div>
+                <div>${seat.player_name || 'Empty'}</div>
+                <div class="muted" style="font-size: 11px;">${seat.ready ? '✓ Ready' : 'Not Ready'}</div>
+                ${seat.bot_runner ? `<div class="muted" style="font-size: 11px;">🤖 ${seat.bot_runner}</div>` : ''}
+                ${seat.player_name === currentUserName ? `
+                  <div style="margin-top: 8px;">
+                    <button class="ghost" style="font-size: 11px; padding: 4px 8px;" onclick="toggleReady('${roomId}')">
+                      ${seat.ready ? 'Unready' : 'Ready'}
+                    </button>
+                    <button class="ghost" style="font-size: 11px; padding: 4px 8px;" onclick="attachBotModal('${roomId}')">
+                      Attach Bot
+                    </button>
+                  </div>
+                ` : ''}
+              </div>
+            `).join('')}
+          </div>
+          
+          <div class="controls">
+            <button onclick="startGame('${roomId}')" ${room.status !== 'waiting' ? 'disabled' : ''}>
+              Start Game
+            </button>
+          </div>
+        `;
+      }
+
+      async function toggleReady(roomId) {
+        const response = await fetch(`/rooms/${roomId}/ready`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ player_name: currentUserName, ready: true })
+        });
+        
+        if (response.ok) {
+          loadRoomDetail(roomId);
+        } else {
+          alert('Failed to set ready status');
+        }
+      }
+
+      async function attachBotModal(roomId) {
+        const botName = prompt('Enter bot name (e.g., demo-bot):');
+        if (!botName) return;
+        
+        const botVersion = prompt('Enter bot version (e.g., v1):', 'v1');
+        if (!botVersion) return;
+        
+        const response = await fetch(`/rooms/${roomId}/attach-bot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ player_name: currentUserName, bot_name: botName, bot_version: botVersion })
+        });
+        
+        if (response.ok) {
+          loadRoomDetail(roomId);
+        } else {
+          alert('Failed to attach bot');
+        }
+      }
+
+      async function startGame(roomId) {
+        const seed = prompt('Enter game seed (optional):', '42');
+        
+        const response = await fetch(`/rooms/${roomId}/start-game`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seed: seed ? parseInt(seed) : 42 })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          alert('Game started! Game ID: ' + result.game_id);
+          currentGameId = result.game_id;
+          
+          // Switch to live game view
+          navItems.forEach(nav => nav.classList.remove('active'));
+          document.querySelector('[data-page="live"]').classList.add('active');
+          Object.values(pages).forEach(p => p.classList.add('hidden'));
+          pages.live.classList.remove('hidden');
+          
+          gameIdEl.textContent = currentGameId;
+          refreshState();
+          connect();
+        } else {
+          const error = await response.json();
+          alert('Failed to start game: ' + (error.detail || 'Unknown error'));
+        }
       }
 
       // Games Management

@@ -13,14 +13,14 @@ from .database import DatabaseManager, RoomRepository
 @dataclass
 class RoomSeat:
     player_name: Optional[str] = None
-    bot_runner: Optional[BotRunner] = None
+    bot_runner: Optional[BotRunner | str] = None
     ready: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         return {
             "player_name": self.player_name,
             "ready": self.ready,
-            "bot_runner": self.bot_runner.bot_id if self.bot_runner and hasattr(self.bot_runner, 'bot_id') else None,
+            "bot_runner": self.bot_runner if isinstance(self.bot_runner, str) else getattr(self.bot_runner, 'bot_id', None),
         }
 
 
@@ -33,6 +33,10 @@ class Room:
     status: str = "waiting"
 
     def join(self, player_name: str) -> RoomSeat:
+        if self.status != "waiting":
+            raise ValueError("This room has already started")
+        if any(s.player_name == player_name for s in self.seats):
+            raise ValueError("This name already occupies a seat")
         for seat in self.seats:
             if seat.player_name is None:
                 seat.player_name = player_name
@@ -46,14 +50,18 @@ class Room:
         self.seats[seat_index].bot_runner = bot_runner
 
     def set_ready(self, player_name: str, ready: bool) -> None:
+        if self.status != "waiting":
+            raise ValueError("This room has already started")
         for seat in self.seats:
             if seat.player_name == player_name:
+                if ready and not seat.bot_runner:
+                    raise ValueError("Select a valid bot before marking ready")
                 seat.ready = ready
                 return
         raise ValueError(f"Player '{player_name}' not found in room")
 
     def is_ready(self) -> bool:
-        return len(self.seats) == 4 and all(seat.player_name is not None and seat.ready for seat in self.seats)
+        return self.status == "waiting" and len(self.seats) == 4 and all(seat.player_name and seat.bot_runner and seat.ready for seat in self.seats)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -188,9 +196,12 @@ class RoomService:
 
     def attach_bot(self, room_id: str, player_name: str, bot_runner: BotRunner) -> Room:
         room = self.get_room(room_id)
+        if room.status != "waiting":
+            raise ValueError("This room has already started")
         for idx, seat in enumerate(room.seats):
             if seat.player_name == player_name:
                 seat.bot_runner = bot_runner
+                seat.ready = False
                 
                 if self.use_database:
                     # Store bot_runner.bot_id in database instead of the object
@@ -199,7 +210,7 @@ class RoomService:
                         seat_dict = {
                             "player_name": s.player_name,
                             "ready": s.ready,
-                            "bot_runner": s.bot_runner.bot_id if s.bot_runner and hasattr(s.bot_runner, 'bot_id') else None
+                            "bot_runner": s.bot_runner if isinstance(s.bot_runner, str) else getattr(s.bot_runner, 'bot_id', None)
                         }
                         seats.append(seat_dict)
                     self.room_repository.update_room_seats(room_id, seats)

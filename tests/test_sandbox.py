@@ -191,15 +191,9 @@ if __name__ == "__main__":
         )
         
         # Mock view and actions for testing
-        class MockView:
-            game_id = "test-game"
-            turn_number = 1
-            current_player = None
-            phase = "playing"
-            players = []
-            board = type('obj', (object,), {'tiles': []})()
-        
-        mock_view = MockView()
+        from src.simulation import Simulator
+        from src.simulator.types.identifiers import PlayerId
+        mock_view = Simulator(seed=1).build_view_for_player(PlayerId.P1)
         mock_actions = [{"type": "build_road"}]
         
         # First timeout - should increment timeout count and return default action

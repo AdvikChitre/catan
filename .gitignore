@@ -209,6 +209,14 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Local platform state and browser validation output
+catan_platform.db*
+catan_replays/
+*.replays/
+node_modules/
+test-results/
+playwright-report/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
