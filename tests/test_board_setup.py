@@ -67,40 +67,22 @@ class TestBoardSetup:
 
 class TestGameViewBuilder:
     def test_game_view_builder_builds_player_specific_snapshot(self):
-        game = GameState()
-        game.game_id = "G-42"
-        game.players = [PlayerState(PlayerId.P1), PlayerState(PlayerId.P2)]
-        game.players[0].resources[ResourceType.WOOD] = 3
-        game.players[1].resources[ResourceType.ORE] = 2
-        game.players[1].development_cards[DevelopmentCardType.KNIGHT] = 1
-
-        game.board_state = BoardSetup.build_board_state(BoardGeometry(), SeededRng(1))
-        game.turn_state = type("TurnState", (), {"turn_number": 3, "current_player": PlayerId.P1})()
-        game.phase = type("Phase", (), {"value": "NORMAL_PLAY"})()
-
-        view = GameViewBuilder(game).build_view(PlayerId.P1)
-
-        assert view.game_id == "G-42"
-        assert view.self.player_id == PlayerId.P1
-        assert view.self.resources[ResourceType.WOOD] == 3
-        assert len(view.opponents) == 1
-        assert view.opponents[0].player_id == PlayerId.P2
-        assert view.opponents[0].resources == {}
-        assert len(view.board.tiles) == 19
-        assert view.turn.current_player == PlayerId.P1
+        from src.simulation import Simulator
+        sim=Simulator(1)
+        sim.game_state.game_id='G-42'
+        sim.player(PlayerId.P1).resources[ResourceType.WOOD]=3
+        view=GameViewBuilder(sim).build_view(PlayerId.P1)
+        assert view.game_id=='G-42'
+        assert view.self.player_id=='P1' and view.self.resources['WOOD']==3
+        assert len(view.opponents)==3 and len(view.board.tiles)==19
+        assert view.turn.current_player=='P1'
 
     def test_game_view_hides_private_opponent_information(self):
-        game = GameState()
-        game.players = [PlayerState(PlayerId.P1), PlayerState(PlayerId.P2)]
-        game.players[1].resources[ResourceType.WHEAT] = 5
-        game.players[1].development_cards[DevelopmentCardType.VICTORY_POINT] = 2
-        game.board_state = BoardSetup.build_board_state(BoardGeometry(), SeededRng(7))
-        game.turn_state = type("TurnState", (), {"turn_number": 1, "current_player": PlayerId.P1})()
-        game.phase = type("Phase", (), {"value": "SETUP_FIRST"})()
-
-        view = GameViewBuilder(game).build_view(PlayerId.P1)
-
-        opp = view.opponents[0]
-        assert opp.resources == {}
-        assert opp.development_cards == {}
-        assert "WHEAT" not in str(opp.resources)
+        from src.simulation import Simulator
+        sim=Simulator(1)
+        sim.player(PlayerId.P2).resources[ResourceType.WHEAT]=5
+        sim.player(PlayerId.P2).development_cards[DevelopmentCardType.VICTORY_POINT]=2
+        view=GameViewBuilder(sim).build_view(PlayerId.P1)
+        opponent=view.opponents[0]
+        assert 'resources' not in opponent and 'development_cards' not in opponent
+        assert opponent.victory_points==0 and opponent.resource_count==5

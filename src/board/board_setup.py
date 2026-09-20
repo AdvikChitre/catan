@@ -38,36 +38,15 @@ class BoardSetup:
         resource_slots.append(None)
 
         rng.shuffle(resource_slots)
-        rng.shuffle(tile_ids)
-
-        if len(tile_ids) != len(resource_slots):
-            raise ValueError("Tile and resource slot counts must match.")
-
-        desert_tile_id: Optional[TileId] = None
-        assigned_tokens = list(cls.STANDARD_TOKENS)
-        rng.shuffle(assigned_tokens)
-
-        for tile_id, resource_type in zip(tile_ids, resource_slots):
-            board_state.tiles[tile_id] = TileState(
-                tile_id=str(tile_id),
-                resource_type=resource_type,
-                number_token=None,
-                has_robber=False,
-            )
-            if resource_type is None:
-                desert_tile_id = tile_id
-
-        if desert_tile_id is None:
-            raise ValueError("Board setup requires exactly one desert tile.")
-
-        land_tile_ids = [tile_id for tile_id in tile_ids if tile_id != desert_tile_id]
-        if len(land_tile_ids) != len(cls.STANDARD_TOKENS):
-            raise ValueError("Number-token count does not match non-desert tiles.")
-
-        rng.shuffle(land_tile_ids)
-        for tile_id, token in zip(land_tile_ids, cls.STANDARD_TOKENS):
-            board_state.tiles[tile_id].number_token = token
-
+        # Counterclockwise outside-in spiral, starting at the eastern corner.
+        spiral = ['T20','T21','T22','T23','T24','T25','T26','T27','T28','T29','T30','T31',
+                  'T10','T11','T12','T13','T14','T15','T00']
+        tokens = iter([5,2,6,3,8,10,9,12,11,4,8,10,9,4,5,6,3,11])
+        desert_tile_id = None
+        for tile_id,resource_type in zip(spiral,resource_slots):
+            board_state.tiles[tile_id] = TileState(tile_id,resource_type,
+                next(tokens) if resource_type is not None else None,resource_type is None)
+            if resource_type is None: desert_tile_id=tile_id
         board_state.robber_tile_id = desert_tile_id
         board_state.tiles[desert_tile_id].has_robber = True
         return board_state

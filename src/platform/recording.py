@@ -1,8 +1,7 @@
-"""Public, self-contained recordings; no game rules or bot API changes."""
+"""Public replay projection using native committed-transition observers."""
 from __future__ import annotations
 
 from collections import Counter
-from functools import wraps
 import json
 
 from ..simulation import Simulator
@@ -29,8 +28,8 @@ def public_state(sim):
                       for k, v in board.vertices.items() if not v.building.is_empty()},
         "roads": {str(k): value(e.road.owner) for k, e in board.edges.items() if not e.road.is_empty()},
         "players": [{"player_id": value(p.player_id),
-                     "victory_points": len(p.settlements) + 2 * len(p.cities)
-                     + 2 * int(p.has_longest_road) + 2 * int(p.has_largest_army),
+                     "victory_points": p.get_calculated_victory_points() if state.winner == p.player_id else
+                     len(p.settlements) + 2 * len(p.cities) + 2 * int(p.has_longest_road) + 2 * int(p.has_largest_army),
                      "roads": len(p.roads), "settlements": len(p.settlements), "cities": len(p.cities),
                      "knights": p.largest_army_count, "longest_road": p.has_longest_road,
                      "largest_army": p.has_largest_army} for p in state.players],
@@ -67,21 +66,32 @@ EVENT_FIELDS = {
     "PlayerTrade": ("proposer", "responder", "give", "receive"),
     "GameEnded": ("winner",),
 }
+EVENT_FIELDS.update({
+    'GameStarted': ('seed', 'order'),
+    'SettlementBuilt': ('vertex', 'setup'), 'RoadBuilt': ('edge', 'setup', 'free'),
+    'CityBuilt': ('vertex',), 'ResourcesProduced': ('resources', 'setup'),
+    'ResourcesTaken': ('resources',), 'CardsDiscarded': ('count',),
+    'ResourceStolen': ('from_player', 'to_player'),
+    'DevelopmentCardPlayed': ('card',), 'MonopolyResolved': ('resource', 'amounts'),
+    'BankTradeCompleted': ('give', 'receive'),
+    'TradeOffered': ('give', 'receive', 'recipients'),
+    'TradeResponse': ('type', 'give', 'receive'),
+    'TradeCompleted': ('responder', 'give', 'receive'), 'TradeCancelled': (),
+    'AchievementChanged': ('achievement', 'owner'),
+    'TurnStarted': ('player_id',), 'TurnEnded': (),
+    'GameWon': ('winner', 'victory_points'),
+    'GameEnded': ('status', 'reason', 'winner', 'turn_count', 'decisions', 'engine_version', 'protocol_version'),
+})
 
 
 class RecordingSimulator(Simulator):
-    """Observe completed method boundaries, including mutations without events.
-
-    Frames are full public snapshots (a checkpoint at every transition). This
-    favors correctness and arbitrary backward seeks over compression for v1.
-    Nested mutations are captured once at their outer transaction boundary.
-    """
+    """Capture full public snapshots after engine transitions."""
 
     def begin_recording(self):
         self.frames = []
         self.public_events = []
         self._pending_events = []
-        self._record_depth = 0
+        self.subscribe(self.capture)
         self.event_bus.subscribe(self._observe_event)
         self.capture("Initial board")
 
@@ -109,42 +119,23 @@ class RecordingSimulator(Simulator):
     def export_recording(self, metadata, error=None):
         self.capture("Run stopped" if not self.game_state.winner else "Game finished")
         winner = value(self.game_state.winner)
-        status = "failed" if error else ("completed" if winner else "stopped")
+        status = "failed" if error else ((self.result or {}).get("status", "stopped"))
+        if status == "player_failed": status = "failed"
         rolls = Counter(str(e["data"]["total"]) for e in self.public_events
                         if e["type"] == "DiceRolled" and "total" in e["data"])
+        production = Counter()
+        for event in self.public_events:
+            if event['type'] == 'ResourcesProduced':
+                production[event['player_id']] += sum(event['data'].get('resources', {}).values())
         return {"schema_version": 1, "metadata": metadata, "geometry": geometry(self),
                 "frames": self.frames, "events": self.public_events,
                 "result": {"status": status, "winner": winner,
                            "reason": error or ("Victory recorded" if winner else
-                             "Simulator returned without a winner. The current simulator runs eight turns."),
+                             (self.result or {}).get("reason", "Recording captured before completion")),
                            "statistics": {"dice_rolls": dict(rolls), "roll_count": sum(rolls.values()),
                                           "recorded_transitions": len(self.frames) - 1,
+                                          "resources_produced": dict(production),
+                                          "player_trades": sum(e['type']=='TradeCompleted' for e in self.public_events),
+                                          "bank_trades": sum(e['type']=='BankTradeCompleted' for e in self.public_events),
                                           "players": self.frames[-1]["state"]["players"]}}}
 
-
-def recorded(method, label):
-    @wraps(method)
-    def call(self, *args, **kwargs):
-        if not hasattr(self, "frames"):
-            return method(self, *args, **kwargs)
-        self._record_depth += 1
-        succeeded = False
-        try:
-            result = method(self, *args, **kwargs)
-            succeeded = True
-            return result
-        finally:
-            self._record_depth -= 1
-            if self._record_depth == 0 and succeeded:
-                self.capture(label)
-    return call
-
-
-for _method, _label in {
-    "start_game": "Game started", "_perform_setup_placement": "Initial placement",
-    "roll_dice": "Dice rolled", "end_turn": "Next turn", "execute_action": "Action played",
-    "move_robber": "Robber moved", "play_development_card": "Development card played",
-    "bank_trade": "Bank trade", "player_trade": "Player trade",
-    "buy_development_card": "Development card purchased",
-}.items():
-    setattr(RecordingSimulator, _method, recorded(getattr(Simulator, _method), _label))

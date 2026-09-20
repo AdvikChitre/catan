@@ -19,7 +19,7 @@ def test_replay_recorder_records_game_started_and_events():
 
     # after starting, recorder should have recorded GameStarted events for each player
     recorded = sim.replay_recorder.events
-    assert len(recorded) >= 4
+    assert len(recorded) == 1
     types = [e.event_type for e in recorded]
     assert "GameStarted" in types
 

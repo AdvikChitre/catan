@@ -46,8 +46,8 @@ class TestBoardGeometry:
         two_to_one = sum(1 for p in board.ports.values() 
                          if p.port_type != PortType.THREE_TO_ONE)
         
-        assert three_to_one == 6
-        assert two_to_one == 3
+        assert three_to_one == 4
+        assert two_to_one == 5
 
     def test_get_vertex(self):
         """Test retrieving a vertex"""
@@ -187,19 +187,19 @@ class TestBoardGeometryQueries:
         """Test getting vertex neighbors"""
         board = BoardGeometry()
         neighbors = board.get_vertex_neighbors(VertexId("V00"))
-        assert isinstance(neighbors, set)
+        assert isinstance(neighbors, frozenset)
 
     def test_get_vertex_edges(self):
         """Test getting edges connected to a vertex"""
         board = BoardGeometry()
         edges = board.get_vertex_edges(VertexId("V00"))
-        assert isinstance(edges, set)
+        assert isinstance(edges, frozenset)
 
     def test_get_vertex_tiles(self):
         """Test getting tiles touching a vertex"""
         board = BoardGeometry()
         tiles = board.get_vertex_tiles(VertexId("V00"))
-        assert isinstance(tiles, set)
+        assert isinstance(tiles, frozenset)
 
     def test_get_vertex_port_with_port(self):
         """Test getting port at a vertex with port"""
@@ -215,7 +215,7 @@ class TestBoardGeometryQueries:
         port = board.get_vertex_port(VertexId("V10"))
         # This vertex might or might not have a port
         # Just check it returns PortId or None
-        assert port is None or isinstance(port, PortId)
+        assert port is None or isinstance(port, str)
 
 
 class TestBoardGeometryProperties:

@@ -1,40 +1,30 @@
-# catan
-Catan Simulator
+# Catan bot arena
 
-## Platform demo
+A Python Catan simulator with a replay-first web interface: select four bots in a room, run the simulation in the background, then watch and inspect the saved recording independently.
 
-This repo includes a minimal platform adapter that runs the simulator, exposes replay/state endpoints, and streams live public events over WebSocket.
+## Start
 
-### Start the server
 ```powershell
 python -m pip install -r requirements.txt
-uvicorn src.platform.server:app --reload --port 8000
+python -m uvicorn src.platform.server:app --host 127.0.0.1 --port 8000
 ```
 
-### Browser UI
-Open http://localhost:8000/ui to view a mock board and event feed.
+Open <http://127.0.0.1:8000>. Choose **Run demo match** to try board playback, scrubbing, turn stepping and results, or create a room and select bot versions.
 
-### API
-- `POST /game/create?seed=42` creates a demo game and returns a `game_id`
-- `GET /game/{game_id}/replay` returns replay metadata and ordered events
-- `GET /game/{game_id}/state` returns a public summary, or `?player=P1` for per-player view
-- `WS /ws/game/{game_id}` streams live events for the connected browser
+The simulator now runs full matches with real board topology, resource accounting, development cards, robber/discards, one-round trade negotiations and victory detection. Players implement `choose_action(view, options)` and a separate optional-no-op `on_event(event)`.
 
-### Example
+See [Player API](PLAYER_API.md), [Project structure and database](PROJECT_STRUCTURE.md), [Implementation plan](SIMULATOR_PLAN.md), and [Web interface guide](WEB_INTERFACE.md).
+
+Run headlessly with `python -m src.simulator.run --seed 42 --replay match.json`. The web app also provides `/player-sdk.zip` with the player SDK and an example implementation.
+
+## Tests
+
 ```powershell
-curl -X POST http://localhost:8000/game/create
-curl http://localhost:8000/game/<game_id>/replay
+python -m pytest -q
+npm ci
+npx playwright install chromium
+npm run test:playback
+npm run test:browser
 ```
 
-### Bot registry
-
-The platform includes a lightweight in-memory bot registry for uploaded bot versions.
-
-- `GET /bots` lists all registered bot versions
-- `POST /bots/upload?bot_name=alpha&bot_version=v1&entrypoint=main.py` creates and validates a bot package
-- `GET /bots/{bot_id}` fetches a specific version
-
-Example:
-```powershell
-curl "http://localhost:8000/bots/upload?bot_name=alpha&bot_version=v1&entrypoint=main.py&description=first+bot"
-```
+Use one local server process. Accounts and secure execution of untrusted uploaded bots are not implemented yet.

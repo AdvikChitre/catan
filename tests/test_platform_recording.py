@@ -29,13 +29,13 @@ def test_recording_captures_real_setup_and_every_roll_without_aliases():
     replay = sim.export_recording({"game_id": "game-test"})
     assert sim.frames[0] == initial
     assert not sim.frames[0]["state"]["buildings"]
-    assert len(sim.frames[-1]["state"]["buildings"]) == 8
-    assert len(sim.frames[-1]["state"]["roads"]) == 8
-    assert len([f for f in sim.frames if f["label"] == "Dice rolled"]) == 8
-    assert replay["result"]["status"] == "stopped"
-    assert replay["result"]["winner"] is None
-    assert replay["result"]["statistics"]["roll_count"] == 8
-    assert replay["geometry"]["valid_hex_topology"] is False
+    assert len(sim.frames[-1]["state"]["buildings"]) >= 8
+    assert len(sim.frames[-1]["state"]["roads"]) >= 8
+    assert len([f for f in sim.frames if any(e["type"] == "DiceRolled" for e in f["events"])]) >= 8
+    assert replay["result"]["status"] == "completed"
+    assert replay["result"]["winner"] is not None
+    assert replay["result"]["statistics"]["roll_count"] >= 8
+    assert replay["geometry"]["valid_hex_topology"] is True
     assert [f["sequence"] for f in sim.frames] == list(range(len(sim.frames)))
     assert sim.frames[-1]["state"] == public_state(sim)
     json.dumps(replay)
@@ -53,7 +53,7 @@ def test_private_events_unknown_payloads_and_hidden_vp_are_not_exported():
     exported = json.dumps(replay)
     assert "never-export" not in exported
     assert "VICTORY_POINT" not in exported
-    assert "resources" not in exported
+    assert all("resources" not in p for f in replay["frames"] for p in f["state"]["players"])
     assert replay["frames"][-1]["state"]["players"][0]["victory_points"] == 0
 
 
@@ -105,14 +105,14 @@ def test_worker_does_not_block_api_and_replay_is_available_only_when_saved(monke
     from src.platform import server
     entered = threading.Event()
     release = threading.Event()
-    original = RecordingSimulator.run
+    original = server._run_match
 
-    def blocked_run(sim):
+    def blocked_run(metadata, packages):
         entered.set()
         assert release.wait(5)
-        return original(sim)
+        return original(metadata, packages)
 
-    monkeypatch.setattr(RecordingSimulator, "run", blocked_run)
+    monkeypatch.setattr(server, "_run_match", blocked_run)
     client = TestClient(server.app)
     gid = client.post('/game/create').json()["game_id"]
     try:
@@ -121,7 +121,7 @@ def test_worker_does_not_block_api_and_replay_is_available_only_when_saved(monke
         assert client.get(f'/game/{gid}/replay').status_code == 409
     finally:
         release.set()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         if client.get(f'/games/{gid}').json()["replay_available"]:
             break

@@ -23,12 +23,12 @@ class GameEvent:
         """Check whether this event is visible to a given player."""
         if self.visibility == "PUBLIC":
             return True
-        if self.visibility == "PLAYER_ONLY":
+        if self.visibility in ("PLAYER_ONLY", "PRIVATE"):
             return target_player == self.player_id
         if self.visibility == "PLAYERS":
             players = self.metadata.get("player_ids", [])
             return target_player in players
-        return True
+        return False
 
     def __repr__(self):
         return (

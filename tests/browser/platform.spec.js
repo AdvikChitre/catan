@@ -29,7 +29,7 @@ test('run, watch, scrub, replay independently, and display responsive results',a
   await expect(page.locator('#timeline')).toHaveValue(paused);
   await page.getByRole('button',{name:'End',exact:true}).click();
   await expect(page.locator('#results')).toBeVisible();
-  await expect(page.getByText('No winner',{exact:true})).toBeVisible();
+  await expect(page.locator('#results')).toContainText('Victory');
   await expect(page.getByRole('button',{name:'Next event',exact:true})).toBeDisabled();
   const final=await page.locator('#timeline').inputValue();
   const other=await context.newPage();await other.goto(page.url());

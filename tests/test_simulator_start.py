@@ -11,6 +11,7 @@ class RecordingBot(DummyBot):
         self.started_for = []
 
     def on_game_start(self, view):
+        super().on_game_start(view)
         self.started_for.append(view.player_id)
 
 
@@ -22,7 +23,7 @@ class TestSimulatorStart:
 
         sim.start_game()
 
-        assert [bot.started_for[0] for bot in bots.values()] == [PlayerId.P1, PlayerId.P2, PlayerId.P3, PlayerId.P4]
+        assert [bot.started_for[0] for bot in bots.values()] == ["P1", "P2", "P3", "P4"]
         assert sim.game_state.turn_state.current_player == PlayerId.P1
         assert sim.event_bus.events[0].event_type == "GameStarted"
 

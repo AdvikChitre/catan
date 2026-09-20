@@ -6,13 +6,22 @@ from pathlib import Path
 import re
 import threading
 import uuid
+import sqlite3
 
 
 class ReplayStore:
-    def __init__(self, directory):
+    def __init__(self, directory, catalog_path=None):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self.catalog_path = str(catalog_path or (self.directory / 'catalog.sqlite3'))
+        with sqlite3.connect(self.catalog_path, timeout=30) as db:
+            db.execute('CREATE TABLE IF NOT EXISTS match_catalog (game_id TEXT PRIMARY KEY, metadata TEXT NOT NULL)')
+            # Import legacy metadata once; preserve the original replay files.
+            for path in self.directory.glob('*.meta.json'):
+                metadata = json.loads(path.read_text(encoding='utf-8'))
+                db.execute('INSERT OR IGNORE INTO match_catalog VALUES (?, ?)',
+                           (metadata['game_id'], json.dumps(metadata)))
 
     def _path(self, game_id, suffix):
         if not re.fullmatch(r"game-[a-zA-Z0-9-]+", game_id):
@@ -28,24 +37,30 @@ class ReplayStore:
             temporary.unlink(missing_ok=True)
 
     def save_metadata(self, metadata):
-        with self.lock:
-            self._write(self._path(metadata["game_id"], "meta"), metadata)
+        with self.lock, sqlite3.connect(self.catalog_path, timeout=30) as db:
+            db.execute('INSERT OR REPLACE INTO match_catalog VALUES (?, ?)',
+                       (metadata['game_id'], json.dumps(metadata)))
 
     def metadata(self, game_id):
-        path = self._path(game_id, "meta")
-        if not path.exists():
-            raise KeyError(game_id)
-        return json.loads(path.read_text(encoding="utf-8"))
+        with sqlite3.connect(self.catalog_path, timeout=30) as db:
+            row=db.execute('SELECT metadata FROM match_catalog WHERE game_id=?',(game_id,)).fetchone()
+        if row is None: raise KeyError(game_id)
+        return json.loads(row[0])
 
     def list_games(self):
-        return sorted((json.loads(p.read_text(encoding="utf-8"))
-                       for p in self.directory.glob("*.meta.json")),
-                      key=lambda g: g["created_at"], reverse=True)
+        with sqlite3.connect(self.catalog_path, timeout=30) as db:
+            rows=db.execute('SELECT metadata FROM match_catalog').fetchall()
+        return sorted((json.loads(row[0]) for row in rows),key=lambda m:m['created_at'],reverse=True)
 
     def finish(self, game_id, replay, metadata):
         with self.lock:
             self._write(self._path(game_id, "replay"), replay)
             self.save_metadata(metadata)
+
+    def save_private_audit(self, game_id, audit):
+        """Never exposed by HTTP endpoints; separate from public replay files."""
+        with self.lock:
+            self._write(self._path(game_id, 'audit'), audit)
 
     def replay(self, game_id):
         self.metadata(game_id)

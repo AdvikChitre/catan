@@ -15,7 +15,9 @@ class TestSetupStateMachine:
         sim = Simulator(seed=123)
         sim.register_bots({pid: SequenceBot() for pid in PlayerId.all_players()})
 
-        sim.perform_setup()
+        sim.start_game()
+        while sim.stage.startswith("SETUP"): sim.step()
+        sim.assert_invariants()
 
         for player in sim.game_state.players:
             assert len(player.settlements) == 2
@@ -31,7 +33,9 @@ class TestSetupStateMachine:
         sim = Simulator(seed=7)
         sim.register_bots({pid: SequenceBot() for pid in PlayerId.all_players()})
 
-        sim.perform_setup()
+        sim.start_game()
+        while sim.stage.startswith("SETUP"): sim.step()
+        sim.assert_invariants()
 
         total_resources = sum(
             player.get_total_resources() for player in sim.game_state.players

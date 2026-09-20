@@ -18,6 +18,7 @@ class GameStatus(str, Enum):
     ACTIVE = "ACTIVE"  # Game in progress
     COMPLETED = "COMPLETED"  # Game won
     ERROR = "ERROR"  # Unrecoverable error
+    STOPPED = "STOPPED"  # Explicit operational limit
 
 
 class GameState:

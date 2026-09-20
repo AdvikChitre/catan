@@ -8,9 +8,17 @@ import os
 from pathlib import Path
 import threading
 import uuid
+import subprocess
+import sys
+import tempfile
+import json
+import hashlib
+import io
+import zipfile
+from ..player.process import terminate_tree, validate_player
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -26,7 +34,8 @@ from .sandbox import SandboxConfig
 DATABASE_URL = os.getenv("CATAN_DB_URL", "sqlite:///catan_platform.db")
 default_replays = (DATABASE_URL.removeprefix("sqlite:///") + ".replays"
                    if DATABASE_URL.startswith("sqlite:///") else "catan_replays")
-store = ReplayStore(os.getenv("CATAN_REPLAY_DIR", default_replays))
+store = ReplayStore(os.getenv("CATAN_REPLAY_DIR", default_replays),
+                    DATABASE_URL.removeprefix("sqlite:///") if DATABASE_URL.startswith("sqlite:///") else None)
 store.recover()
 room_service = RoomService(use_database=True, database_url=DATABASE_URL)
 bot_registry = BotRegistry(use_database=True, database_url=DATABASE_URL)
@@ -95,50 +104,34 @@ def require_bot(bot_id):
 
 
 def _run_match(metadata, packages):
-    sim = None
-    runners = []
+    process=None
     try:
-        metadata.update(status="running", started_at=now())
+        metadata.update(status='running',started_at=now())
         store.save_metadata(metadata)
-        sim = RecordingSimulator(seed=metadata["seed"])
-        sim.game_state.game_id = metadata["game_id"]
-        sim.replay_recorder.metadata["game_id"] = metadata["game_id"]
-        bot_map = {}
-        for pid, package in zip(PlayerId.all_players(), packages):
-            if package is None:
-                bot_map[pid] = DummyBot()
-            else:
-                runner = BotRunner(bot_id=package.bot_id, name=package.name, version=package.version,
-                                   use_sandbox=package.use_sandbox, bot_code=package.bot_code,
-                                   sandbox_config=SandboxConfig(wall_time_limit=0.8))
-                if not runner.validate().get("ok"):
-                    raise ValueError("A selected bot failed validation")
-                runners.append(runner)
-                bot_map[pid] = runner
-        sim.register_bots(bot_map)
-        sim.begin_recording()
-        sim.run()
-        recording = sim.export_recording(dict(metadata))
-        metadata.update(status=recording["result"]["status"], finished_at=now(),
-                        winner=recording["result"]["winner"], reason=recording["result"]["reason"],
-                        replay_available=True)
-        recording["metadata"] = dict(metadata)
-        store.finish(metadata["game_id"], recording, metadata)
+        job={'metadata':metadata,'replay_directory':str(store.directory.resolve()),
+             'catalog_path':str(Path(store.catalog_path).resolve()),
+             'packages':[{'code':p.bot_code if p.use_sandbox else None} if p else None for p in packages]}
+        with tempfile.TemporaryDirectory(prefix='catan_match_') as directory:
+            path=Path(directory)/'job.json';path.write_text(json.dumps(job),encoding='utf-8')
+            process=subprocess.Popen([sys.executable,'-m','src.platform.match_worker',str(path)],
+                cwd=Path(__file__).resolve().parents[2],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0,
+                start_new_session=os.name!='nt')
+            _,diagnostics=process.communicate(timeout=180)
+            if process.returncode:
+                logging.error('Match worker diagnostics: %s', diagnostics[-8192:].decode('utf-8',errors='replace'))
+                raise RuntimeError('Match worker failed')
+        metadata=store.metadata(metadata['game_id'])
+        metadata['finished_at']=now()
+        store.save_metadata(metadata)
     except Exception:
-        logging.exception("Match %s failed", metadata["game_id"])
-        metadata.update(status="failed", finished_at=now(), reason="Simulation failed. See the local server log.")
-        if sim is not None and hasattr(sim, "frames"):
-            recording = sim.export_recording(dict(metadata), error=metadata["reason"])
-            metadata["replay_available"] = True
-            recording["metadata"] = dict(metadata)
-            store.finish(metadata["game_id"], recording, metadata)
-        else:
-            store.save_metadata(metadata)
+        if process is not None: terminate_tree(process)
+        logging.exception('Match %s failed',metadata['game_id'])
+        metadata.update(status='failed',finished_at=now(),reason='Match worker failed or exceeded its time limit.')
+        store.save_metadata(metadata)
     finally:
-        for runner in runners:
-            runner.stop()
-        if metadata.get("room_id"):
-            room_service.room_repository.update_room_status(metadata["room_id"], "finished")
+        if metadata.get('room_id'):
+            room_service.room_repository.update_room_status(metadata['room_id'],'finished')
 
 
 def launch(seed, participants, packages, room_id=None):
@@ -146,6 +139,7 @@ def launch(seed, participants, packages, room_id=None):
     metadata = {"game_id": game_id, "seed": seed, "room_id": room_id,
                 "players": [p["name"] for p in participants], "participants": participants,
                 "status": "queued", "created_at": now(), "winner": None, "replay_available": False}
+    metadata["implementation_hashes"] = [hashlib.sha256((p.bot_code or "example-v1").encode()).hexdigest() if p else "example-v1" for p in packages]
     store.save_metadata(metadata)
     workers.submit(_run_match, dict(metadata), packages)
     return {"game_id": game_id, "room_id": room_id}
@@ -266,9 +260,10 @@ def upload_bot(request: BotUploadRequest):
         if request.bot_code and request.use_sandbox:
             try:
                 compile(request.bot_code, "uploaded-bot.py", "exec")
-            except SyntaxError as error:
+                validate_player(request.bot_code)
+            except (SyntaxError, RuntimeError, TimeoutError, OSError, ValueError) as error:
                 package.validated = False
-                package.validation_errors = [f"Python syntax error on line {error.lineno}: {error.msg}"]
+                package.validation_errors = ["Player validation failed: define one Player subclass with choose_action and protocol version 1."]
                 bot_registry.bot_repository.update_bot_validation(package.bot_id, False, package.validation_errors)
         return package_data(package)
 
@@ -285,3 +280,15 @@ def get_bot(bot_id: str):
 @app.get("/ui", response_class=HTMLResponse)
 def index():
     return (assets / "index.html").read_text(encoding="utf-8")
+
+
+@app.get('/player-sdk.zip')
+def player_sdk():
+    root=Path(__file__).resolve().parents[2]
+    output=io.BytesIO()
+    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
+        for path in ('src/__init__.py','src/player/__init__.py','src/player/interface.py',
+                     'src/player/example.py','examples/my_player.py','PLAYER_API.md'):
+            archive.write(root/path,path)
+    return Response(output.getvalue(),media_type='application/zip',
+                    headers={'Content-Disposition':'attachment; filename="catan-player-sdk.zip"'})

@@ -1,51 +1,42 @@
-"""Main entry point for the simulator"""
-from __future__ import annotations
-
-from typing import Any, List
-
-from ..bots.bot_interface import BotInterface
-from ..views import GameView
-from ..simulator.types.identifiers import PlayerId
+"""Run a full local match with the example players."""
+from ..player.example import ExamplePlayer
 from ..simulation import Simulator
+from .types.identifiers import PlayerId
 
-
-class DummyBot(BotInterface):
-    """Simple deterministic bot for early simulation testing."""
-    def on_game_start(self, view: GameView) -> None:
-        """No-op at game start."""
-        pass
-
-    def take_turn(self, view: GameView, available_actions: List[Any]):
-        """Return the first legal action or None if there are no choices."""
-        if available_actions:
-            return available_actions[0]
-        return None
-
-    def on_event(self, event: dict) -> None:
-        """Receive a game event."""
-        pass
-
-    def on_game_end(self, result: Any) -> None:
-        """No-op at game end."""
-        pass
+DummyBot = ExamplePlayer  # Compatibility import for the existing platform.
 
 
 def main():
-    """Run a complete game with dummy bots."""
-    simulator = Simulator(seed=42)
+    import argparse
+    import json
+    from pathlib import Path
+    from ..player.process import ProcessPlayer
+    from ..platform.recording import RecordingSimulator
+    from ..simulation.simulator import GameConfig
+    parser=argparse.ArgumentParser(description='Run a headless four-player Catan match')
+    parser.add_argument('--seed',type=int,default=42)
+    parser.add_argument('--max-turns',type=int,default=1000)
+    parser.add_argument('--player',action='append',default=[],help='Python implementation file; repeat four times')
+    parser.add_argument('--replay',help='Save the public replay JSON')
+    parser.add_argument('--audit',help='Save a private decision audit; do not publish this file')
+    args=parser.parse_args()
+    if len(args.player) not in (0,4): parser.error('Supply zero or four --player arguments')
+    sim=RecordingSimulator(args.seed,GameConfig(max_turns=args.max_turns))
+    players={}
+    try:
+        for i,pid in enumerate(PlayerId.all_players()):
+            players[pid]=ProcessPlayer(Path(args.player[i]).read_text(encoding='utf-8')) if args.player else ExamplePlayer()
+        sim.register_players(players);sim.begin_recording()
+        result=sim.run();sim.assert_invariants()
+        if args.replay:
+            Path(args.replay).write_text(json.dumps(sim.export_recording({'seed':args.seed,'game_id':sim.game_state.game_id})),encoding='utf-8')
+        if args.audit: Path(args.audit).write_text(json.dumps(sim.export_private_audit()),encoding='utf-8')
+        print(json.dumps(result))
+        return 1 if result['status'] in ('failed','player_failed') else 0
+    finally:
+        for player in players.values():
+            if isinstance(player,ProcessPlayer): player.close()
 
-    bots = {
-        PlayerId.P1: DummyBot(),
-        PlayerId.P2: DummyBot(),
-        PlayerId.P3: DummyBot(),
-        PlayerId.P4: DummyBot(),
-    }
-    simulator.register_bots(bots)
 
-    print("Starting Catan simulator...")
-    simulator.run()
-    print("Game complete!")
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    raise SystemExit(main())

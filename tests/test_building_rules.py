@@ -17,7 +17,7 @@ class TestBuildingRules:
         player.resources[ResourceType.SHEEP] = 1
         player.resources[ResourceType.WHEAT] = 1
 
-        assert sim.can_build_settlement(PlayerId.P1, VertexId("V00")) is True
+        assert sim.can_build_settlement(PlayerId.P1, VertexId("V00")) is False  # no connecting road
 
     def test_can_build_city_requires_existing_settlement(self):
         sim = Simulator(seed=42)

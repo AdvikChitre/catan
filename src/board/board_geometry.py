@@ -17,7 +17,19 @@ from ..simulator.types.identifiers import TileId, VertexId, EdgeId, PortId, Coor
 from ..simulator.types.resource import PortType
 
 
-class VertexDefinition:
+class GeometryValue:
+    def __setattr__(self, name, value):
+        if getattr(self, '_sealed', False):
+            raise TypeError('Board geometry is immutable')
+        object.__setattr__(self, name, value)
+
+    def seal(self):
+        for key,value in vars(self).copy().items():
+            if isinstance(value,set): object.__setattr__(self,key,frozenset(value))
+        object.__setattr__(self,'_sealed',True)
+
+
+class VertexDefinition(GeometryValue):
     """Immutable vertex topology"""
     def __init__(self, vertex_id: VertexId, coordinate: Coordinate):
         self.id = vertex_id
@@ -31,7 +43,7 @@ class VertexDefinition:
         return f"VertexDefinition({self.id}, {self.coordinate})"
 
 
-class EdgeDefinition:
+class EdgeDefinition(GeometryValue):
     """Immutable edge topology"""
     def __init__(self, edge_id: EdgeId, vertex_ids: Tuple[VertexId, VertexId]):
         self.id = edge_id
@@ -41,7 +53,7 @@ class EdgeDefinition:
         return f"EdgeDefinition({self.id})"
 
 
-class TileDefinition:
+class TileDefinition(GeometryValue):
     """Immutable tile topology"""
     def __init__(self, tile_id: TileId, coordinate: Coordinate):
         self.id = tile_id
@@ -53,7 +65,7 @@ class TileDefinition:
         return f"TileDefinition({self.id}, {self.coordinate})"
 
 
-class PortDefinition:
+class PortDefinition(GeometryValue):
     """Immutable port definition"""
     def __init__(self, port_id: PortId, port_type: PortType):
         self.id = port_id
@@ -64,142 +76,72 @@ class PortDefinition:
         return f"PortDefinition({self.id}, {self.port_type.value})"
 
 
-class BoardGeometry:
+class BoardGeometry(GeometryValue):
     """Immutable topology of the canonical 19-tile Catan board"""
     
     def __init__(self):
-        self.vertices: Dict[VertexId, VertexDefinition] = {}
-        self.edges: Dict[EdgeId, EdgeDefinition] = {}
-        self.tiles: Dict[TileId, TileDefinition] = {}
-        self.ports: Dict[PortId, PortDefinition] = {}
-        
-        # Build the canonical board
-        self._build_tiles()
-        self._build_vertices()
-        self._build_edges()
-        self._build_ports()
-        self._build_adjacencies()
-
-    def _build_tiles(self) -> None:
-        """Create all 19 tiles with their positions"""
-        # Tiles arranged in hexagonal grid with axial coordinates
-        # Ring 1 (center): 1 tile
-        # Ring 2: 6 tiles
-        # Ring 3: 12 tiles
-        
-        tile_coords = [
-            # Center
-            (Coordinate(0, 0), TileId("T00")),
-            # Ring 1
-            (Coordinate(1, 0), TileId("T10")),
-            (Coordinate(1, -1), TileId("T11")),
-            (Coordinate(0, -1), TileId("T12")),
-            (Coordinate(-1, 0), TileId("T13")),
-            (Coordinate(-1, 1), TileId("T14")),
-            (Coordinate(0, 1), TileId("T15")),
-            # Ring 2
-            (Coordinate(2, 0), TileId("T20")),
-            (Coordinate(2, -1), TileId("T21")),
-            (Coordinate(2, -2), TileId("T22")),
-            (Coordinate(1, -2), TileId("T23")),
-            (Coordinate(0, -2), TileId("T24")),
-            (Coordinate(-1, -1), TileId("T25")),
-            (Coordinate(-2, 0), TileId("T26")),
-            (Coordinate(-2, 1), TileId("T27")),
-            (Coordinate(-2, 2), TileId("T28")),
-            (Coordinate(-1, 2), TileId("T29")),
-            (Coordinate(0, 2), TileId("T30")),
-            (Coordinate(1, 1), TileId("T31")),
-        ]
-        
-        for coord, tile_id in tile_coords:
-            self.tiles[tile_id] = TileDefinition(tile_id, coord)
-
-    def _build_vertices(self) -> None:
-        """Create all 54 vertices"""
-        vertices_data = self._get_canonical_vertices()
-        
-        for vertex_id, coordinate in vertices_data:
-            self.vertices[vertex_id] = VertexDefinition(vertex_id, coordinate)
-
-    def _build_edges(self) -> None:
-        """Create all 72 edges"""
-        edges_data = self._get_canonical_edges()
-        
-        for edge_id, vertex_pair in edges_data:
-            self.edges[edge_id] = EdgeDefinition(edge_id, vertex_pair)
-
-    def _build_ports(self) -> None:
-        """Create all 9 ports"""
-        port_data = [
-            (PortId("P_3TO1_N"), PortType.THREE_TO_ONE, [VertexId("V00"), VertexId("V01")]),
-            (PortId("P_3TO1_NE"), PortType.THREE_TO_ONE, [VertexId("V06"), VertexId("V07")]),
-            (PortId("P_3TO1_SE"), PortType.THREE_TO_ONE, [VertexId("V14"), VertexId("V15")]),
-            (PortId("P_3TO1_S"), PortType.THREE_TO_ONE, [VertexId("V22"), VertexId("V23")]),
-            (PortId("P_3TO1_SW"), PortType.THREE_TO_ONE, [VertexId("V30"), VertexId("V31")]),
-            (PortId("P_3TO1_NW"), PortType.THREE_TO_ONE, [VertexId("V36"), VertexId("V37")]),
-            (PortId("P_2TO1_WOOD"), PortType.TWO_TO_ONE_WOOD, [VertexId("V02"), VertexId("V03")]),
-            (PortId("P_2TO1_WHEAT"), PortType.TWO_TO_ONE_WHEAT, [VertexId("V08"), VertexId("V09")]),
-            (PortId("P_2TO1_SHEEP"), PortType.TWO_TO_ONE_SHEEP, [VertexId("V16"), VertexId("V17")]),
-        ]
-        
-        for port_id, port_type, vertex_ids in port_data:
-            port_def = PortDefinition(port_id, port_type)
-            for v_id in vertex_ids:
-                port_def.vertex_ids.add(v_id)
-                if v_id in self.vertices:
-                    self.vertices[v_id].port_id = port_id
-            self.ports[port_id] = port_def
-
-    def _build_adjacencies(self) -> None:
-        """Build adjacency relationships between vertices, edges, and tiles."""
-        for edge_id, edge_def in self.edges.items():
-            for vertex_id in edge_def.vertex_ids:
-                self.vertices[vertex_id].adjacent_edge_ids.add(edge_id)
-
-        for vertex_id, vertex in self.vertices.items():
-            seen_neighbors = set()
-            for edge_id in vertex.adjacent_edge_ids:
-                edge = self.edges[edge_id]
-                for other_vertex in edge.vertex_ids:
-                    if other_vertex != vertex_id:
-                        seen_neighbors.add(other_vertex)
-            vertex.adjacent_vertex_ids.update(seen_neighbors)
-
-        tile_ids = list(self.tiles.keys())
-        for index, vertex_id in enumerate(self.vertices.keys()):
-            vertex = self.vertices[vertex_id]
-            start = index % len(tile_ids)
-            for offset in range(3):
-                tile_id = tile_ids[(start + offset) % len(tile_ids)]
-                vertex.adjacent_tile_ids.add(tile_id)
-                self.tiles[tile_id].vertex_ids.add(vertex_id)
-
-            for tile_id in list(vertex.adjacent_tile_ids):
-                tile = self.tiles[tile_id]
-                for edge_id in self.edges:
-                    if vertex_id in self.edges[edge_id].vertex_ids:
-                        tile.edge_ids.add(edge_id)
-
-    def _get_canonical_vertices(self) -> List[Tuple[VertexId, Coordinate]]:
-        """Get all 54 canonical vertices with their coordinates"""
-        vertices = []
-        
-        for i in range(54):
-            vertices.append((VertexId(f"V{i:02d}"), Coordinate(i, i)))
-        
-        return vertices
-
-    def _get_canonical_edges(self) -> List[Tuple[EdgeId, Tuple[VertexId, VertexId]]]:
-        """Get all 72 canonical edges with their vertex connections"""
-        edges = []
-        
-        for i in range(72):
-            v1 = VertexId(f"V{i % 54:02d}")
-            v2 = VertexId(f"V{(i + 1) % 54:02d}")
-            edges.append((EdgeId(f"E{i:02d}"), (v1, v2)))
-        
-        return edges
+        import math
+        from collections import Counter
+        self.tiles, self.vertices, self.edges, self.ports = {}, {}, {}, {}
+        # Stable axial tile IDs retained for recordings. Pointy hex corners use
+        # integer lattice coordinates; Cartesian conversion happens only once.
+        coords = [(0,0),(1,0),(1,-1),(0,-1),(-1,0),(-1,1),(0,1),
+                  (2,0),(2,-1),(2,-2),(1,-2),(0,-2),(-1,-1),(-2,0),
+                  (-2,1),(-2,2),(-1,2),(0,2),(1,1)]
+        names = ['T00']+[f'T1{i}' for i in range(6)]+[f'T{20+i}' for i in range(12)]
+        corners = [(1,-1),(1,1),(0,2),(-1,1),(-1,-1),(0,-2)]
+        tile_points = {name: [(2*q+r+dx,3*r+dy) for dx,dy in corners]
+                       for name,(q,r) in zip(names,coords)}
+        points = sorted({p for ps in tile_points.values() for p in ps}, key=lambda p:(p[1],p[0]))
+        ids = {p: VertexId(f'V{i:02d}') for i,p in enumerate(points)}
+        for (x,y),vid in ids.items():
+            self.vertices[vid] = VertexDefinition(vid,Coordinate(x*math.sqrt(3)/2,y/2))
+        pairs = sorted({tuple(sorted((ids[ps[i]],ids[ps[(i+1)%6]])))
+                        for ps in tile_points.values() for i in range(6)})
+        edge_ids = {pair: EdgeId(f'E{i:02d}') for i,pair in enumerate(pairs)}
+        for pair,eid in edge_ids.items():
+            self.edges[eid] = EdgeDefinition(eid,pair)
+            a,b=pair
+            self.vertices[a].adjacent_vertex_ids.add(b)
+            self.vertices[b].adjacent_vertex_ids.add(a)
+            for v in pair: self.vertices[v].adjacent_edge_ids.add(eid)
+        uses=Counter()
+        for name,coord in zip(names,coords):
+            tile=TileDefinition(TileId(name),Coordinate(*coord))
+            vs=[ids[p] for p in tile_points[name]]
+            tile.vertex_ids.update(vs)
+            for i,v in enumerate(vs):
+                self.vertices[v].adjacent_tile_ids.add(tile.id)
+                eid=edge_ids[tuple(sorted((v,vs[(i+1)%6])))]
+                tile.edge_ids.add(eid)
+                uses[eid]+=1
+            self.tiles[tile.id]=tile
+        # Walk the 30 coastal edges; space nine non-overlapping ports around it.
+        coastal={e for e,n in uses.items() if n==1}
+        start=min(v for e in coastal for v in self.edges[e].vertex_ids)
+        current=start; previous=None; coast=[]
+        while len(coast)<30:
+            choices=sorted(e for e in self.vertices[current].adjacent_edge_ids
+                           if e in coastal and e!=previous)
+            eid=choices[0]; coast.append(eid)
+            current=next(v for v in self.edges[eid].vertex_ids if v!=current)
+            previous=eid
+        types=[PortType.THREE_TO_ONE,PortType.TWO_TO_ONE_WOOD,
+               PortType.THREE_TO_ONE,PortType.TWO_TO_ONE_BRICK,
+               PortType.TWO_TO_ONE_SHEEP,PortType.THREE_TO_ONE,
+               PortType.TWO_TO_ONE_WHEAT,PortType.THREE_TO_ONE,PortType.TWO_TO_ONE_ORE]
+        for i,(offset,kind) in enumerate(zip([0,3,6,10,13,16,20,23,26],types)):
+            pid=PortId('P_3TO1_N' if i==0 else f'PORT{i}')
+            port=PortDefinition(pid,kind)
+            port.vertex_ids.update(self.edges[coast[offset]].vertex_ids)
+            self.ports[pid]=port
+            for vid in port.vertex_ids: self.vertices[vid].port_id=pid
+        from types import MappingProxyType
+        for name in ('vertices','edges','tiles','ports'):
+            objects=getattr(self,name)
+            for item in objects.values(): item.seal()
+            setattr(self,name,MappingProxyType(objects))
+        self.seal()
 
     def get_vertex(self, vertex_id: VertexId) -> Optional[VertexDefinition]:
         """Get a vertex by ID"""

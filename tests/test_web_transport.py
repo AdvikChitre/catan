@@ -20,4 +20,4 @@ def test_get_replay_and_state_snapshots():
 
     p1_state = server.get_state(sim, PlayerId.P1)
     assert p1_state["player_id"] == PlayerId.P1.value
-    assert "resources" in p1_state
+    assert "resources" in p1_state["self"]

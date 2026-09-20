@@ -1,45 +1,18 @@
-"""Action execution tests."""
+import pytest
+from tests.engine_helpers import playing, grant, apply, option
+from src.simulator.types.identifiers import PlayerId
 
-from src.simulation import Simulator
-from src.simulator.run import DummyBot
-from src.simulator.types.identifiers import PlayerId, VertexId, EdgeId
-from src.simulator.types.resource import ResourceType
+def test_build_road_spends_cards_and_preserves_invariants():
+    s=playing();grant(s,s.active,{'WOOD':1,'BRICK':1});a=option(s,'BUILD_ROAD')
+    s.apply_action(s.active,a);assert s._road_owner(a['edge'])==s.active;s.assert_invariants()
 
+def test_city_returns_settlement_piece():
+    s=playing();grant(s,s.active,{'ORE':3,'WHEAT':2});a=option(s,'BUILD_CITY');p=s.player(s.active)
+    before=p.settlements_remaining;s.apply_action(s.active,a)
+    assert p.settlements_remaining==before+1;s.assert_invariants()
 
-class TestActionExecution:
-    def test_execute_settlement_action_reduces_resources_and_places_building(self):
-        sim = Simulator(seed=13)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
-        player = sim.game_state.get_player(PlayerId.P1)
-        player.resources[ResourceType.WOOD] = 1
-        player.resources[ResourceType.BRICK] = 1
-        player.resources[ResourceType.SHEEP] = 1
-        player.resources[ResourceType.WHEAT] = 1
-
-        result = sim.execute_action(PlayerId.P1, {"type": "BUILD_SETTLEMENT", "vertex": VertexId("V00")})
-
-        assert result["type"] == "BUILD_SETTLEMENT"
-        assert sim.game_state.board_state.vertices[VertexId("V00")].building.owner == PlayerId.P1
-        assert PlayerId.P1 in {player.player_id for player in sim.game_state.players}
-
-    def test_execute_road_action_places_road(self):
-        sim = Simulator(seed=13)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
-        player = sim.game_state.get_player(PlayerId.P1)
-        player.resources[ResourceType.WOOD] = 1
-        player.resources[ResourceType.BRICK] = 1
-
-        result = sim.execute_action(PlayerId.P1, {"type": "BUILD_ROAD", "edge": EdgeId("E00")})
-
-        assert result["type"] == "BUILD_ROAD"
-        assert sim.game_state.board_state.edges[EdgeId("E00")].road.owner == PlayerId.P1
-
-    def test_execute_end_turn_advances_player(self):
-        sim = Simulator(seed=13)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
-        sim.game_state.turn_state.current_player = PlayerId.P4
-
-        sim.execute_action(PlayerId.P4, "END_TURN")
-
-        assert sim.game_state.turn_state.current_player == PlayerId.P1
-        assert sim.game_state.turn_state.phase == "PRE_ROLL"
+def test_wrong_seat_and_stale_decision_rejected():
+    s=playing()
+    with pytest.raises(ValueError):s.apply_action(PlayerId.P2,{'type':'END_TURN'})
+    with pytest.raises(ValueError):s.apply_action(s.active,{'type':'END_TURN'},-1)
+    apply(s,'END_TURN');assert s.active==PlayerId.P2 and s.stage=='PRE_ROLL'

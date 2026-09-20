@@ -1,85 +1,59 @@
-"""Tests for robber moves and special development-card actions."""
-
-from src.simulation import Simulator
-from src.simulator.run import DummyBot
+import pytest
+from tests.engine_helpers import setup,playing,grant,apply,option
 from src.simulator.types.identifiers import PlayerId
-from src.simulator.types.resource import DevelopmentCardType, ResourceType
+from src.simulator.types.resource import DevelopmentCardType as D, ResourceType as R
 
 
-class TestSpecialActions:
-    def test_play_knight_moves_robber_and_steals(self):
-        sim = Simulator(seed=7)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
+def card(sim,kind):
+    sim.development_deck.remove(kind);sim.bank.development_cards[kind]-=1
+    sim.player(sim.active).development_cards[kind]+=1
 
-        p1 = sim.game_state.get_player(PlayerId.P1)
-        p2 = sim.game_state.get_player(PlayerId.P2)
-        p1.development_cards[DevelopmentCardType.KNIGHT] = 1
-        p2.resources[ResourceType.WOOD] = 2
-        p2.resources[ResourceType.BRICK] = 1
 
-        robber_tile = sim.game_state.board_state.robber_tile_id
-        target_tile = next(
-            tile_id for tile_id, tile in sim.game_state.board_state.tiles.items()
-            if tile_id != robber_tile and tile.resource_type is not None
-        )
+def test_knight_uses_same_choice_api_and_returns_to_pre_roll():
+    s=setup();card(s,D.KNIGHT)
+    apply(s,'PLAY_DEVELOPMENT_CARD',card='KNIGHT')
+    assert s.stage=='ROBBER'
+    actions=s.available_actions()
+    assert all(a['tile']!=s.board.robber_tile_id for a in actions)
+    for a in actions:
+        if a['victim']:assert PlayerId(a['victim']) in s._victims(a['tile'],s.active)
+    a=actions[0];s.apply_action(s.active,a)
+    assert s.board.robber_tile_id==a['tile'] and s.stage=='PRE_ROLL'
+    assert not any(a['type']=='PLAY_DEVELOPMENT_CARD' for a in s.available_actions())
+    s.assert_invariants()
 
-        result = sim.play_development_card(PlayerId.P1, DevelopmentCardType.KNIGHT, tile_id=target_tile, victim_id=PlayerId.P2)
 
-        assert result["type"] == "PLAY_KNIGHT"
-        assert sim.game_state.board_state.robber_tile_id == target_tile
-        assert sim.game_state.board_state.tiles[target_tile].has_robber is True
-        assert p1.resources[ResourceType.WOOD] == 1
-        assert p2.resources[ResourceType.WOOD] == 1
+def test_year_of_plenty_accepts_two_of_same_resource():
+    s=playing();card(s,D.YEAR_OF_PLENTY);before=s.player(s.active).resources[R.WOOD]
+    apply(s,'PLAY_DEVELOPMENT_CARD',card='YEAR_OF_PLENTY')
+    with pytest.raises(ValueError):apply(s,'TAKE_RESOURCES',resources={'WOOD':2,'BRICK':3})
+    apply(s,'TAKE_RESOURCES',resources={'WOOD':2})
+    assert s.player(s.active).resources[R.WOOD]==before+2
+    s.assert_invariants()
 
-    def test_play_year_of_plenty_gives_two_resources(self):
-        sim = Simulator(seed=8)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
 
-        p1 = sim.game_state.get_player(PlayerId.P1)
-        p1.development_cards[DevelopmentCardType.YEAR_OF_PLENTY] = 1
-        sim.game_state.bank_state.resources[ResourceType.WOOD] = 10
-        sim.game_state.bank_state.resources[ResourceType.BRICK] = 10
+def test_monopoly_collects_resource_without_changing_total():
+    s=playing();card(s,D.MONOPOLY);grant(s,PlayerId.P2,{'ORE':2});grant(s,PlayerId.P3,{'ORE':1})
+    before=sum(p.resources[R.ORE] for p in s.game_state.players)
+    apply(s,'PLAY_DEVELOPMENT_CARD',card='MONOPOLY');apply(s,'TAKE_MONOPOLY',resource='ORE')
+    assert s.player(s.active).resources[R.ORE]==before
+    s.assert_invariants()
 
-        sim.play_development_card(
-            PlayerId.P1,
-            DevelopmentCardType.YEAR_OF_PLENTY,
-            resources={ResourceType.WOOD: 1, ResourceType.BRICK: 1},
-        )
 
-        assert p1.resources[ResourceType.WOOD] == 1
-        assert p1.resources[ResourceType.BRICK] == 1
-        assert sim.game_state.bank_state.resources[ResourceType.WOOD] == 9
-        assert sim.game_state.bank_state.resources[ResourceType.BRICK] == 9
+def test_free_roads_recalculate_options_and_do_not_charge_resources():
+    s=playing();card(s,D.ROAD_BUILDING);p=s.player(s.active);before=p.resources.copy();roads=len(p.roads)
+    apply(s,'PLAY_DEVELOPMENT_CARD',card='ROAD_BUILDING')
+    a=option(s,'BUILD_FREE_ROAD');s.apply_action(s.active,a)
+    assert a not in s.available_actions()
+    s.apply_action(s.active,option(s,'BUILD_FREE_ROAD'))
+    assert len(p.roads)==roads+2 and p.resources==before and s.stage=='PLAYING'
+    s.assert_invariants()
 
-    def test_play_monopoly_steals_all_matching_cards_from_opponents(self):
-        sim = Simulator(seed=9)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
 
-        p1 = sim.game_state.get_player(PlayerId.P1)
-        p2 = sim.game_state.get_player(PlayerId.P2)
-        p3 = sim.game_state.get_player(PlayerId.P3)
-        p1.development_cards[DevelopmentCardType.MONOPOLY] = 1
-        p2.resources[ResourceType.WOOD] = 2
-        p3.resources[ResourceType.WOOD] = 1
-
-        sim.play_development_card(PlayerId.P1, DevelopmentCardType.MONOPOLY, resource_type=ResourceType.WOOD)
-
-        assert p1.resources[ResourceType.WOOD] == 3
-        assert p2.resources[ResourceType.WOOD] == 0
-        assert p3.resources[ResourceType.WOOD] == 0
-
-    def test_bank_trade_exchanges_four_for_one(self):
-        sim = Simulator(seed=10)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
-
-        p1 = sim.game_state.get_player(PlayerId.P1)
-        p1.resources[ResourceType.WOOD] = 4
-        sim.game_state.bank_state.resources[ResourceType.BRICK] = 10
-
-        result = sim.bank_trade(PlayerId.P1, ResourceType.WOOD, ResourceType.BRICK)
-
-        assert result["type"] == "BANK_TRADE"
-        assert p1.resources[ResourceType.WOOD] == 0
-        assert p1.resources[ResourceType.BRICK] == 1
-        assert sim.game_state.bank_state.resources[ResourceType.WOOD] == 23
-        assert sim.game_state.bank_state.resources[ResourceType.BRICK] == 9
+def test_bank_trade_uses_port_ratio_and_returns_cards():
+    s=playing();grant(s,s.active,{'WOOD':4})
+    a=next(a for a in s.available_actions() if a['type']=='BANK_TRADE' and a['give_resource']=='WOOD')
+    before=s.player(s.active).resources[R.WOOD]
+    s.apply_action(s.active,a)
+    assert s.player(s.active).resources[R.WOOD]==before-a['ratio']
+    s.assert_invariants()

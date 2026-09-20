@@ -1,32 +1,15 @@
-"""Basic development-card purchase tests."""
+import pytest
+from tests.engine_helpers import playing,grant,apply
 
-from src.simulation import Simulator
-from src.simulator.run import DummyBot
-from src.simulator.types.identifiers import PlayerId
-from src.simulator.types.resource import ResourceType
+def test_purchase_draws_seeded_card_and_returns_cost_to_bank():
+    s=playing();grant(s,s.active,{'WHEAT':1,'SHEEP':1,'ORE':1})
+    card=s.development_deck[0];apply(s,'BUY_DEVELOPMENT_CARD')
+    assert s.player(s.active).development_cards[card]==1
+    assert s.new_cards[s.active][card]==1
+    assert not any(a.get('card')==card.value for a in s.available_actions())
+    s.assert_invariants()
 
-
-class TestDevelopmentCards:
-    def test_buy_development_card_draws_from_seeded_deck(self):
-        sim = Simulator(seed=42)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
-        player = sim.game_state.get_player(PlayerId.P1)
-        player.resources[ResourceType.WHEAT] = 1
-        player.resources[ResourceType.SHEEP] = 1
-        player.resources[ResourceType.ORE] = 1
-
-        card = sim.buy_development_card(PlayerId.P1)
-
-        assert card in sim.game_state.bank_state.development_cards
-        assert player.development_cards[card] >= 1
-        assert sim.game_state.bank_state.development_cards[card] >= 0
-
-    def test_buy_development_card_requires_resources(self):
-        sim = Simulator(seed=42)
-        sim.register_bots({pid: DummyBot() for pid in PlayerId.all_players()})
-
-        try:
-            sim.buy_development_card(PlayerId.P1)
-            assert False, "Expected ValueError when resources are insufficient"
-        except ValueError:
-            pass
+def test_purchase_without_resources_is_rejected():
+    s=playing()
+    for p in s.game_state.players:s._pay(p.player_id,dict(p.resources))
+    with pytest.raises(ValueError):apply(s,'BUY_DEVELOPMENT_CARD')

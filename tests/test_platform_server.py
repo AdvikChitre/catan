@@ -128,11 +128,9 @@ def test_list_and_upload_bot_registry():
 def test_upload_sandboxed_bot():
     """Test uploading a sandboxed bot with code."""
     bot_code = """
-def on_game_start(view):
-    return {"status": "ready"}
-
-def take_turn(view, available_actions):
-    return available_actions[0] if available_actions else None
+from src.player import Player
+class MyPlayer(Player):
+    def choose_action(self,view,options): return options[0]
 """
     upload_response = client.post(
         "/bots/upload",
