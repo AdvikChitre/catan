@@ -5,10 +5,10 @@ The container runs the FastAPI service, simulator match workers, static web inte
 ```bash
 docker compose up -d --build
 docker compose ps
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1/health
 ```
 
-The Compose port binds to localhost deliberately. Put Caddy, nginx, or another TLS reverse proxy in front of `127.0.0.1:8000` and add authentication before exposing it to the internet. Back up the named volume with your normal Docker volume backup process.
+The Compose service publishes HTTP on port 80. When a domain is available, terminate TLS with Caddy, nginx, or another reverse proxy and add authentication before opening the service to a wider audience. Back up the named volume with your normal Docker volume backup process.
 
 Uploaded Player implementations execute in child processes with time and resource limits, but they are executable Python and are not a security boundary against a hostile author. Deploy this service for trusted participants. Public untrusted submissions require a separate locked-down runner host or per-match sandbox with no access to the application data volume.
 
