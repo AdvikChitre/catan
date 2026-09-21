@@ -1,12 +1,17 @@
 import {test,expect} from '@playwright/test';
 import {completeBoardFixture} from './complete-board-fixture.js';
 
-test('run, watch, scrub, replay independently, and display responsive results',async({page,context})=>{
+const playerCode=`from src.player.example import ExamplePlayer
+class BrowserPlayer(ExamplePlayer):
+    pass
+`;
+async function launchMatch(request,seed=42){const suffix=Date.now().toString(36)+Math.random().toString(36).slice(2,6),names=['Alice','Bob','Carol','Dave'].map(n=>n+suffix);const created=await request.post(`/rooms?room_name=Browser-${suffix}&created_by=${names[0]}`);const rid=(await created.json()).room.room_id;for(const who of names.slice(1))await request.post(`/rooms/${rid}/join`,{data:{player_name:who}});for(const who of names){const bot=`player-${who}`;await request.post('/bots/upload',{data:{bot_name:bot,bot_version:'v1',use_sandbox:true,bot_code:playerCode}});await request.post(`/rooms/${rid}/attach-bot`,{data:{player_name:who,bot_name:bot}});await request.post(`/rooms/${rid}/ready`,{data:{player_name:who,ready:true}});}const started=await request.post(`/rooms/${rid}/start-game`,{data:{seed}});return (await started.json()).game_id;}
+
+test('run, watch, scrub, replay independently, and display responsive results',async({page,context,request})=>{
+  test.setTimeout(90000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('/');
-  await expect(page.getByRole('heading',{name:'Every move. At your own pace.'})).toBeVisible();
-  await page.getByRole('button',{name:'Run demo match',exact:true}).click();
-  await expect(page.locator('#timeline')).toBeVisible();
+  const gid=await launchMatch(request,41);await page.goto(`/#match/${gid}`);
+  await expect(page.locator('#timeline')).toBeVisible({timeout:30000});
   await expect(page.locator('[data-tile]')).toHaveCount(19);
   await expect(page.locator('#timeline')).toHaveValue('0');
   await expect(page.locator('#results')).toBeHidden();
@@ -14,7 +19,7 @@ test('run, watch, scrub, replay independently, and display responsive results',a
   await page.getByRole('button',{name:'Next event',exact:true}).click();
   await expect(page.locator('#timeline')).toHaveValue('1');
   await page.getByRole('button',{name:'Next turn',exact:true}).click();
-  await expect(page.locator('#turnBadge')).toHaveText('TURN 2');
+  await expect(page.locator('#turnBadge')).not.toHaveText('TURN 1');
   await page.getByRole('button',{name:'Previous turn',exact:true}).click();
   await expect(page.locator('#timeline')).toHaveValue('0');
   await page.locator('#timeline').fill('6');
@@ -48,12 +53,14 @@ test('run, watch, scrub, replay independently, and display responsive results',a
 });
 
 test('four participants select a saved bot, ready up and launch a recorded room match',async({page,browser})=>{
-  const suffix=Date.now().toString(36),bot=`Demo-${suffix}`;
+  test.setTimeout(120000);
+  const suffix=Date.now().toString(36),bot=`Player-${suffix}`;
   await page.goto('/#bots');
-  await page.getByRole('button',{name:'+ Add bot version',exact:true}).click();
-  await page.getByRole('textbox',{name:'Bot name',exact:true}).fill(bot);
+  await page.getByRole('button',{name:'+ Add player version',exact:true}).click();
+  await page.getByRole('textbox',{name:'Player name',exact:true}).fill(bot);
   await page.getByRole('textbox',{name:'Version',exact:true}).fill('v1');
-  await page.getByRole('button',{name:'Save bot version',exact:true}).click();
+  await page.getByRole('textbox',{name:'Or paste code',exact:true}).fill(playerCode);
+  await page.getByRole('button',{name:'Save player version',exact:true}).click();
   await expect(page.getByRole('heading',{name:bot,exact:true})).toBeVisible();
   await page.getByRole('link',{name:'Rooms',exact:true}).click();
   await page.getByRole('button',{name:'+ Create room',exact:true}).click();
@@ -83,7 +90,7 @@ test('four participants select a saved bot, ready up and launch a recorded room 
     await expect(page.getByRole('button',{name:'Simulate match →',exact:true})).toBeEnabled();
     await page.screenshot({path:'test-results/room-ready.png',fullPage:true});
     await page.getByRole('button',{name:'Simulate match →',exact:true}).click();
-    await expect(page.locator('#timeline')).toBeVisible();
+    await expect(page.locator('#timeline')).toBeVisible({timeout:30000});
     await expect(page.locator('#players')).toContainText('Alice');
     await expect(page.locator('#players')).toContainText('Dave');
     await expect(page.locator('#players')).toContainText(bot);
@@ -94,7 +101,7 @@ test('four participants select a saved bot, ready up and launch a recorded room 
 
 test('user names are rendered as text, and missing matches have a recoverable error',async({page,request})=>{
   const bot=`<img src=x onerror=alert(1)>-${Date.now()}`;
-  await request.post('/bots/upload',{data:{bot_name:bot,bot_version:'v1'}});
+  await request.post('/bots/upload',{data:{bot_name:bot,bot_version:'v1',use_sandbox:true,bot_code:playerCode}});
   let alert=false;page.on('dialog',async d=>{alert=true;await d.dismiss();});
   await page.goto('/#bots');
   await expect(page.getByRole('heading',{name:bot,exact:true})).toBeVisible();

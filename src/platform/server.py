@@ -22,14 +22,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..simulator.run import DummyBot
 from ..simulator.types.identifiers import PlayerId
 from .bot_registry import BotRegistry
 from .bot_runner import BotRunner
-from .recording import RecordingSimulator
 from .replay_store import ReplayStore
 from .room_service import RoomService
-from .sandbox import SandboxConfig
 
 DATABASE_URL = os.getenv("CATAN_DB_URL", "sqlite:///catan_platform.db")
 default_replays = (DATABASE_URL.removeprefix("sqlite:///") + ".replays"
@@ -55,7 +52,7 @@ class BotUploadRequest(BaseModel):
     entrypoint: str = Field(default="main.py", max_length=120)
     description: str = Field(default="", max_length=2000)
     bot_code: str = Field(default="", max_length=200_000)
-    use_sandbox: bool = False
+    use_sandbox: bool = True
 
 
 class RoomJoinRequest(BaseModel):
@@ -134,25 +131,15 @@ def _run_match(metadata, packages):
             room_service.room_repository.update_room_status(metadata['room_id'],'finished')
 
 
-def launch(seed, participants, packages, room_id=None):
+def launch(seed, participants, packages, room_id=None, room_name=None):
     game_id = f"game-{uuid.uuid4().hex}"
-    metadata = {"game_id": game_id, "seed": seed, "room_id": room_id,
+    metadata = {"game_id": game_id, "seed": seed, "room_id": room_id, "room_name": room_name,
                 "players": [p["name"] for p in participants], "participants": participants,
                 "status": "queued", "created_at": now(), "winner": None, "replay_available": False}
-    metadata["implementation_hashes"] = [hashlib.sha256((p.bot_code or "example-v1").encode()).hexdigest() if p else "example-v1" for p in packages]
+    metadata["implementation_hashes"] = [hashlib.sha256(p.bot_code.encode()).hexdigest() for p in packages]
     store.save_metadata(metadata)
     workers.submit(_run_match, dict(metadata), packages)
     return {"game_id": game_id, "room_id": room_id}
-
-
-@app.post("/game/create")
-def create_game(seed: int = 42):
-    if not 0 <= seed <= 2**31 - 1:
-        raise ValueError("Seed must be between 0 and 2147483647")
-    participants = [{"player_id": p.value, "name": f"Demo {i + 1}", "bot_id": "demo-v1",
-                     "bot_name": "Demo bot", "bot_version": "v1"}
-                    for i, p in enumerate(PlayerId.all_players())]
-    return launch(seed, participants, [None] * 4)
 
 
 @app.get("/games")
@@ -237,10 +224,10 @@ def start_room_game(room_id: str, request: StartGameRequest):
             raise ValueError("All four seats need a valid bot and must be ready")
         packages = [require_bot(s.to_dict()["bot_runner"]) for s in room.seats]
         participants = [{"player_id": pid.value, "name": s.player_name, "bot_id": b.bot_id,
-                         "bot_name": b.name, "bot_version": b.version}
+                         "bot_name": b.name, "bot_version": b.version, "color": s.color}
                         for pid, s, b in zip(PlayerId.all_players(), room.seats, packages)]
         room_service.start_game(room_id)
-        return launch(request.seed, participants, packages, room_id)
+        return launch(request.seed, participants, packages, room_id, room.name)
 
 
 @app.get("/bots")
@@ -251,6 +238,8 @@ def list_bots():
 @app.post("/bots/upload")
 def upload_bot(request: BotUploadRequest):
     with mutation_lock:
+        if not request.use_sandbox or not request.bot_code.strip():
+            raise ValueError("Upload a Python Player implementation")
         if bot_registry.get_bot(f"{request.bot_name.strip()}-{request.bot_version.strip()}"):
             raise HTTPException(409, "That version already exists. Choose a new version name.")
         package = bot_registry.register(request.bot_name.strip(), request.bot_version.strip(),
@@ -280,6 +269,12 @@ def get_bot(bot_id: str):
 @app.get("/ui", response_class=HTMLResponse)
 def index():
     return (assets / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/health")
+def health():
+    """Container and reverse-proxy liveness endpoint."""
+    return {"status": "ok"}
 
 
 @app.get('/player-sdk.zip')

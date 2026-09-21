@@ -406,7 +406,9 @@ class RoomRepository:
     ) -> Room:
         """Create a new room."""
         if seats is None:
-            seats = [{"player_name": None, "ready": False, "bot_runner": None} for _ in range(max_players)]
+            palette = ("#d45b37", "#377da5", "#7759a6", "#d0a229")
+            seats = [{"player_name": None, "ready": False, "bot_runner": None,
+                      "color": palette[index]} for index in range(max_players)]
         
         with self.db as session:
             room = Room(

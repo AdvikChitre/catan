@@ -1,7 +1,7 @@
 const NS = 'http://www.w3.org/2000/svg';
 export const playerColors = ['#c9663b', '#4b83a0', '#9273aa', '#c5a344'];
 const terrain = {WOOD:'#416e50', BRICK:'#b8714e', SHEEP:'#8fa65b', WHEAT:'#c5a354', ORE:'#7a8a8d', DESERT:'#c7b58a'};
-const color = id => playerColors[Number((id || 'P1').slice(1)) - 1] || '#708070';
+const color = (id, palette=playerColors) => palette[Number((id || 'P1').slice(1)) - 1] || '#708070';
 function svgNode(tag, attrs={}, text) {
   const el = document.createElementNS(NS, tag);
   for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
@@ -11,15 +11,16 @@ function svgNode(tag, attrs={}, text) {
 function label(parent, x, y, text, attrs={}) {
   parent.append(svgNode('text', {x,y,'text-anchor':'middle',...attrs}, text));
 }
-function house(parent, x, y, owner, city=false, size=9) {
+function house(parent, x, y, owner, city=false, size=9, fill=color(owner)) {
   const group = svgNode('g', {transform:`translate(${x} ${y}) scale(${size/9})`});
-  group.append(svgNode('path',{d:city?'M-13 9V-3L-6-10 1-3V0H8V-8H14V9Z':'M-9 8V-2L0-10 9-2V8Z',fill:color(owner),stroke:'#fff8e8','stroke-width':2}));
+  group.append(svgNode('path',{d:city?'M-13 9V-3L-6-10 1-3V0H8V-8H14V9Z':'M-9 8V-2L0-10 9-2V8Z',fill,stroke:'#fff8e8','stroke-width':2}));
   parent.append(group);
 }
 
 export class Board {
-  constructor(container, geometry) {
+  constructor(container, geometry, participants=[]) {
     this.container = container; this.geometry=geometry; this.zoom=1; this.pan={x:0,y:0};
+    this.palette=playerColors.map((fallback,i)=>participants.find(p=>p.player_id===`P${i+1}`)?.color||fallback);
     this.svg=svgNode('svg',{viewBox:'-270 -225 540 450',role:'img','aria-label':'Recorded Catan board',class:'board-svg'});
     this.scene=svgNode('g'); this.svg.append(this.scene); container.replaceChildren(this.svg);
     this.svg.addEventListener('pointerdown', e=>{this.drag={cx:e.clientX,cy:e.clientY,px:this.pan.x,py:this.pan.y};this.svg.setPointerCapture(e.pointerId);});
@@ -67,12 +68,15 @@ export class Board {
     }
     if(g.valid_hex_topology){
       for(const edge of g.edges){const owner=state.roads[edge.id];if(!owner)continue;const [a,b]=edge.vertices.map(id=>vertices.get(id));
-        const line=svgNode('line',{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:color(owner),'stroke-width':7,'stroke-linecap':'round'});line.append(svgNode('title',{},`${edge.id} · ${owner}`));this.scene.append(line);}
-      for(const [id,b] of Object.entries(state.buildings)){const p=vertices.get(id);if(p)house(this.scene,...p,b.owner,b.type==='CITY');}
+        const line=svgNode('line',{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:color(owner,this.palette),'stroke-width':7,'stroke-linecap':'round'});line.append(svgNode('title',{},`${edge.id} · ${owner}`));this.scene.append(line);}
+      for(const [id,b] of Object.entries(state.buildings)){const p=vertices.get(id);if(p)house(this.scene,...p,b.owner,b.type==='CITY',9,color(b.owner,this.palette));}
       for(const port of g.ports){const ends=port.vertices.map(id=>vertices.get(id));const x=(ends[0][0]+ends[1][0])/2,y=(ends[0][1]+ends[1][1])/2;
-        const distance=Math.hypot(x,y)||1;const px=x+x/distance*28,py=y+y/distance*28;
-        this.scene.append(svgNode('line',{x1:x,y1:y,x2:px,y2:py,stroke:'#7a8c7c','stroke-width':1}));
-        label(this.scene,px,py,port.type==='THREE_TO_ONE'?'3:1':`2:1 ${port.type.replace('TWO_TO_ONE_','').toLowerCase()}`,{'font-size':7,fill:'#354d3e'});}
+        const distance=Math.hypot(x,y)||1;const px=x+x/distance*42,py=y+y/distance*42;
+        this.scene.append(svgNode('line',{x1:ends[0][0],y1:ends[0][1],x2:px,y2:py,stroke:'#506f5b','stroke-width':1.5,'stroke-dasharray':'4 3'}));
+        this.scene.append(svgNode('line',{x1:ends[1][0],y1:ends[1][1],x2:px,y2:py,stroke:'#506f5b','stroke-width':1.5,'stroke-dasharray':'4 3'}));
+        this.scene.append(svgNode('circle',{cx:px,cy:py,r:15,fill:'#fff8e8',stroke:'#35503c','stroke-width':1.5}));
+        label(this.scene,px,py+2,port.type==='THREE_TO_ONE'?'3:1':'2:1',{'font-size':8,'font-weight':'700',fill:'#244132'});
+        if(port.type!=='THREE_TO_ONE')label(this.scene,px,py+24,port.type.replace('TWO_TO_ONE_','').toLowerCase(),{'font-size':7,fill:'#354d3e'});}
     }
   }
 }

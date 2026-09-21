@@ -86,7 +86,8 @@ def test_room_roundtrip_preserves_versions_and_selection_clears_ready():
         if who != "A":
             assert client.post(f'/rooms/{rid}/join', json={"player_name": who}).status_code == 200
         bot_name = f"{who}-{suffix}"
-        payload = {"bot_name": bot_name, "bot_version": "v1"}
+        payload = {"bot_name": bot_name, "bot_version": "v1", "use_sandbox": True,
+                   "bot_code": "from src.player import Player\nclass P(Player):\n def choose_action(self, view, options): return options[0]\n"}
         assert client.post('/bots/upload', json=payload).status_code == 200
         assert client.post('/bots/upload', json=payload).status_code == 409
         assert client.post(f'/rooms/{rid}/attach-bot', json={"player_name": who, **payload}).status_code == 200
@@ -114,7 +115,17 @@ def test_worker_does_not_block_api_and_replay_is_available_only_when_saved(monke
 
     monkeypatch.setattr(server, "_run_match", blocked_run)
     client = TestClient(server.app)
-    gid = client.post('/game/create').json()["game_id"]
+    suffix = uuid.uuid4().hex[:8]
+    names = [f"A{suffix}", f"B{suffix}", f"C{suffix}", f"D{suffix}"]
+    rid = client.post('/rooms', params={"room_name": "Async", "created_by": names[0]}).json()["room"]["room_id"]
+    code = "from src.player import Player\nclass P(Player):\n def choose_action(self, view, options): return options[0]\n"
+    for who in names[1:]: client.post(f'/rooms/{rid}/join', json={"player_name": who})
+    for who in names:
+        bot = f"async-{who}"
+        client.post('/bots/upload', json={"bot_name": bot, "bot_version": "v1", "use_sandbox": True, "bot_code": code})
+        client.post(f'/rooms/{rid}/attach-bot', json={"player_name": who, "bot_name": bot})
+        client.post(f'/rooms/{rid}/ready', json={"player_name": who})
+    gid = client.post(f'/rooms/{rid}/start-game', json={"seed": 42}).json()["game_id"]
     try:
         assert entered.wait(5)
         assert client.get('/games').status_code == 200

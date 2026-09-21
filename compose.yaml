@@ -1,0 +1,21 @@
+services:
+  catan:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - catan-data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+
+volumes:
+  catan-data:

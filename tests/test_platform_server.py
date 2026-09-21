@@ -3,6 +3,7 @@
 import os
 import tempfile
 import time
+import uuid
 from fastapi.testclient import TestClient
 
 # Use a temporary database for testing
@@ -14,6 +15,30 @@ from src.platform.server import app
 print([(list(r.methods), r.path) for r in app.routes if hasattr(r, 'methods')])
 
 client = TestClient(app)
+
+PLAYER_CODE = """from src.player import Player
+class TestPlayer(Player):
+    def choose_action(self, view, options): return options[0]
+"""
+
+
+def player_payload(name, version="v1"):
+    return {"bot_name": name, "bot_version": version, "entrypoint": "main.py",
+            "use_sandbox": True, "bot_code": PLAYER_CODE}
+
+
+def create_game(seed=42):
+    suffix = uuid.uuid4().hex[:8]
+    names = [f"A-{suffix}", f"B-{suffix}", f"C-{suffix}", f"D-{suffix}"]
+    room_id = client.post("/rooms", params={"room_name": f"Test {suffix}", "created_by": names[0]}).json()["room"]["room_id"]
+    for name in names[1:]:
+        assert client.post(f"/rooms/{room_id}/join", json={"player_name": name}).status_code == 200
+    for name in names:
+        bot = f"player-{name}"
+        assert client.post("/bots/upload", json=player_payload(bot)).status_code == 200
+        assert client.post(f"/rooms/{room_id}/attach-bot", json={"player_name": name, "bot_name": bot}).status_code == 200
+        assert client.post(f"/rooms/{room_id}/ready", json={"player_name": name, "ready": True}).status_code == 200
+    return client.post(f"/rooms/{room_id}/start-game", json={"seed": seed})
 
 
 def wait_for_recording(game_id):
@@ -40,7 +65,7 @@ atexit.register(cleanup_test_db)
 
 
 def test_create_game_returns_game_id():
-    response = client.post("/game/create", params={"seed": 99})
+    response = create_game(99)
     assert response.status_code == 200
     body = response.json()
     assert "game_id" in body
@@ -48,7 +73,7 @@ def test_create_game_returns_game_id():
 
 
 def test_state_route_for_created_game():
-    create_response = client.post("/game/create", params={"seed": 7})
+    create_response = create_game(7)
     game_id = create_response.json()["game_id"]
 
     wait_for_recording(game_id)
@@ -60,7 +85,7 @@ def test_state_route_for_created_game():
 
 
 def test_replay_route_for_created_game():
-    create_response = client.post("/game/create", params={"seed": 11})
+    create_response = create_game(11)
     game_id = create_response.json()["game_id"]
 
     wait_for_recording(game_id)
@@ -79,7 +104,7 @@ def test_room_can_start_game_when_ready():
         assert room_join.status_code == 200
 
     for player in ["Alice", "Bob", "Carol", "Dave"]:
-        registered = client.post("/bots/upload", json={"bot_name": f"bot-{player.lower()}", "bot_version": "v1"})
+        registered = client.post("/bots/upload", json=player_payload(f"bot-{player.lower()}"))
         assert registered.status_code == 200
         attach = client.post(f"/rooms/{room_id}/attach-bot", json={"player_name": player, "bot_name": f"bot-{player.lower()}"})
         assert attach.status_code == 200
@@ -100,13 +125,7 @@ def test_list_and_upload_bot_registry():
 
     upload_response = client.post(
         "/bots/upload",
-        json={
-            "bot_name": "alpha",
-            "bot_version": "v1",
-            "entrypoint": "main.py",
-            "description": "first bot version",
-            "use_sandbox": False,
-        },
+        json={**player_payload("alpha"), "description": "first player version"},
     )
     assert upload_response.status_code == 200
     body = upload_response.json()
@@ -119,7 +138,7 @@ def test_list_and_upload_bot_registry():
 
     invalid = client.post(
         "/bots/upload",
-        json={"bot_name": "", "bot_version": "v2", "entrypoint": "main.py", "use_sandbox": False},
+        json={**player_payload("", "v2")},
     )
     assert invalid.status_code == 200
     assert invalid.json()["validated"] is False
@@ -151,7 +170,7 @@ class MyPlayer(Player):
 
 
 def test_game_metadata_endpoints():
-    create_response = client.post("/game/create", params={"seed": 123})
+    create_response = create_game(123)
     assert create_response.status_code == 200
     game_id = create_response.json()["game_id"]
 

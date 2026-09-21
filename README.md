@@ -9,7 +9,7 @@ python -m pip install -r requirements.txt
 python -m uvicorn src.platform.server:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. Choose **Run demo match** to try board playback, scrubbing, turn stepping and results, or create a room and select bot versions.
+Open <http://127.0.0.1:8000>. Upload Player implementations, create a room, fill and ready all four seats, then simulate and watch the recorded match. See `DEPLOYMENT.md` for the Docker VPS setup.
 
 The simulator now runs full matches with real board topology, resource accounting, development cards, robber/discards, one-round trade negotiations and victory detection. Players implement `choose_action(view, options)` and a separate optional-no-op `on_event(event)`.
 

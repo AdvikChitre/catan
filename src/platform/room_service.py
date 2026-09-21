@@ -9,18 +9,22 @@ from typing import Dict, List, Optional
 from .bot_runner import BotRunner
 from .database import DatabaseManager, RoomRepository
 
+PLAYER_COLORS = ("#d45b37", "#377da5", "#7759a6", "#d0a229")
+
 
 @dataclass
 class RoomSeat:
     player_name: Optional[str] = None
     bot_runner: Optional[BotRunner | str] = None
     ready: bool = False
+    color: Optional[str] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
             "player_name": self.player_name,
             "ready": self.ready,
             "bot_runner": self.bot_runner if isinstance(self.bot_runner, str) else getattr(self.bot_runner, 'bot_id', None),
+            "color": self.color,
         }
 
 
@@ -37,9 +41,10 @@ class Room:
             raise ValueError("This room has already started")
         if any(s.player_name == player_name for s in self.seats):
             raise ValueError("This name already occupies a seat")
-        for seat in self.seats:
+        for index, seat in enumerate(self.seats):
             if seat.player_name is None:
                 seat.player_name = player_name
+                seat.color = PLAYER_COLORS[index]
                 seat.ready = False
                 return seat
         raise ValueError("Room is full")
@@ -90,7 +95,8 @@ class RoomService:
     def create_room(self, room_name: str, created_by: str) -> Room:
         if self.use_database:
             room_id = f"room-{uuid.uuid4().hex[:8]}"
-            seats = [{"player_name": None, "ready": False, "bot_runner": None} for _ in range(4)]
+            seats = [{"player_name": None, "ready": False, "bot_runner": None,
+                      "color": PLAYER_COLORS[index]} for index in range(4)]
             seats[0]["player_name"] = created_by  # Creator takes first seat
             
             db_room = self.room_repository.create_room(
@@ -116,7 +122,8 @@ class RoomService:
                 room_seats.append(RoomSeat(
                     player_name=seat.get("player_name"),
                     bot_runner=bot_runner,
-                    ready=seat.get("ready", False)
+                    ready=seat.get("ready", False),
+                    color=seat.get("color") or PLAYER_COLORS[len(room_seats)],
                 ))
             
             room = Room(
@@ -145,7 +152,11 @@ class RoomService:
                     name=db_room.name,
                     created_by=db_room.created_by,
                     status=db_room.status,
-                    seats=[RoomSeat(**seat) for seat in seats_data]
+                    seats=[RoomSeat(player_name=seat.get("player_name"),
+                                    bot_runner=seat.get("bot_runner"),
+                                    ready=seat.get("ready", False),
+                                    color=seat.get("color") or PLAYER_COLORS[index])
+                           for index, seat in enumerate(seats_data)]
                 )
             raise KeyError(f"Room '{room_id}' not found")
         else:
@@ -210,7 +221,8 @@ class RoomService:
                         seat_dict = {
                             "player_name": s.player_name,
                             "ready": s.ready,
-                            "bot_runner": s.bot_runner if isinstance(s.bot_runner, str) else getattr(s.bot_runner, 'bot_id', None)
+                            "bot_runner": s.bot_runner if isinstance(s.bot_runner, str) else getattr(s.bot_runner, 'bot_id', None),
+                            "color": s.color,
                         }
                         seats.append(seat_dict)
                     self.room_repository.update_room_seats(room_id, seats)

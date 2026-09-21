@@ -1,6 +1,6 @@
 # Public replay format v1
 
-`GET /games` lists saved job metadata. `POST /game/create?seed=42` launches a demo; room matches use `POST /rooms/{id}/start-game` with JSON `{ "seed": 42 }` after four valid bot selections and ready checks.
+`GET /games` lists saved job metadata. Matches use `POST /rooms/{id}/start-game` with JSON `{ "seed": 42 }` after four validated Player selections and ready checks.
 
 `GET /games/{id}` returns status and `replay_available`. A `queued` or `running` job has no readable replay yet. `GET /game/{id}/replay` returns HTTP 409 until saved, or 404 for an unknown ID. No live game stream is needed. Once ready, this returns:
 
