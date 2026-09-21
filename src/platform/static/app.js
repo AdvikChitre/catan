@@ -3,6 +3,8 @@ import {Playback} from './playback.js';
 
 const app=document.querySelector('#app'), modal=document.querySelector('#modal');
 const identity=document.querySelector('#identity');
+const apiBase=String(window.CATAN_CONFIG?.apiBaseUrl||'').replace(/\/$/,'');
+const apiUrl=url=>`${apiBase}${url}`;
 identity.value=localStorage.getItem('catan-player')||'';
 let routeVersion=0,pollTimer=null,playTimer=null,viewer=null,noticeTimer=null,roomSignature=null;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -13,7 +15,7 @@ const name=()=>identity.value.trim();
 const colors=i=>playerColors[i%4];
 const participantColor=(participants,id,index=0)=>participants.find(p=>p.player_id===id)?.color||colors(index);
 function notify(message){const el=document.querySelector('#notice');el.textContent=message;el.hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>el.hidden=true,6000);}
-async function api(url,body){const r=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let data;try{data=await r.json();}catch{throw Error('The server returned an unreadable response.');}if(!r.ok){const d=data.detail;throw Error(Array.isArray(d)?d.map(x=>x.msg).join('; '):d||'Request failed');}return data;}
+async function api(url,body){const r=await fetch(apiUrl(url),body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let data;try{data=await r.json();}catch{throw Error('The server returned an unreadable response.');}if(!r.ok){const d=data.detail;throw Error(Array.isArray(d)?d.map(x=>x.msg).join('; '):d||'Request failed');}return data;}
 function dialog(title,html){document.querySelector('#modalTitle').textContent=title;document.querySelector('#modalBody').innerHTML=html;modal.showModal();}
 document.querySelector('#closeModal').onclick=()=>modal.close();
 modal.addEventListener('click',e=>{if(e.target===modal&&e.clientX<modal.getBoundingClientRect().left)modal.close();});
@@ -62,7 +64,7 @@ function scheduleRoom(id,version){later(()=>room(id,version),version);}
 
 async function bots(version){const {bots}=await api('/bots');if(version!==routeVersion)return;
   app.innerHTML=`<div class="page-head"><div><div class="eyebrow">Your contenders</div><h1>My players</h1><p class="muted">Keep versions separate. Every match remembers exactly who played.</p></div><button class="primary" data-action="upload">+ Add player version</button></div>
-  <div class="note">Upload a Python Player implementation. Each player keeps its own memory and receives game events. <a href="/player-sdk.zip">Download the Player SDK</a>. Only run code from authors you trust.</div>
+  <div class="note">Upload a Python Player implementation. Each player keeps its own memory and receives game events. <a href="${esc(apiUrl('/player-sdk.zip'))}">Download the Player SDK</a>. Only run code from authors you trust.</div>
   ${bots.length?`<div class="cards">${bots.map(b=>`<article class="card"><div class="card-top"><span class="eyebrow" style="margin:0">${esc(b.version)}</span><span class="badge ${b.validated?'completed':'failed'}">${b.validated?'API checked':'Invalid'}</span></div><h2>${esc(b.name)}</h2><p class="muted">${esc(b.description||'No description provided.')}</p>${b.validation_errors?.length?`<p class="form-error">${esc(b.validation_errors.join(' '))}</p>`:''}<div class="actions"><button data-action="botDetail" data-id="${esc(b.bot_id)}">View details</button></div></article>`).join('')}</div>`:`<div class="empty"><div class="empty-symbol">◇</div><h2>A strategy starts with a player.</h2><p class="muted">Upload a Python Player implementation and keep each competition version immutable.</p><button data-action="upload" class="primary">Add your first player</button></div>`}`;bindActions();
 }
 

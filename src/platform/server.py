@@ -18,6 +18,7 @@ import zipfile
 from ..player.process import terminate_tree, validate_player
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -42,6 +43,16 @@ for _old_game in store.list_games():
 workers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="catan-match")
 mutation_lock = threading.RLock()
 app = FastAPI(title="Catan replay studio")
+frontend_origins = [origin.strip().rstrip("/") for origin in
+                    os.getenv("CATAN_FRONTEND_ORIGINS", "").split(",") if origin.strip()]
+if frontend_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=frontend_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
 assets = Path(__file__).with_name("static")
 app.mount("/static", StaticFiles(directory=assets, check_dir=False), name="static")
 

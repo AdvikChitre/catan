@@ -11,6 +11,8 @@ python -m uvicorn src.platform.server:app --host 127.0.0.1 --port 8000
 
 Open <http://127.0.0.1:8000>. Upload Player implementations, create a room, fill and ready all four seats, then simulate and watch the recorded match. See `DEPLOYMENT.md` for the Docker VPS setup.
 
+The production frontend can be deployed independently through Vercel. See `VERCEL_DEPLOYMENT.md`; its build targets `https://catansim.duckdns.org` and the backend accepts explicitly configured frontend origins.
+
 The simulator now runs full matches with real board topology, resource accounting, development cards, robber/discards, one-round trade negotiations and victory detection. Players implement `choose_action(view, options)` and a separate optional-no-op `on_event(event)`.
 
 See [Player API](PLAYER_API.md), [Project structure and database](PROJECT_STRUCTURE.md), [Implementation plan](SIMULATOR_PLAN.md), and [Web interface guide](WEB_INTERFACE.md).

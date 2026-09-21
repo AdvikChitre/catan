@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "node scripts/build-frontend.mjs",
     "test:playback": "node --test tests/playback.test.js",
     "test:browser": "playwright test"
   },
