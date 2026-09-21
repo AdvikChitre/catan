@@ -5,7 +5,7 @@ The static frontend is built from `src/platform/static` into `dist`. The product
 ## Create the Vercel project
 
 1. In Vercel, choose **Add New → Project** and import `AdvikChitre/catan`.
-2. Select **Other** as the framework preset and leave the root directory as the repository root.
+2. Leave the root directory as the repository root. `vercel.json` forces the **Other** framework preset so Vercel does not auto-detect the FastAPI backend.
 3. Set the production branch to `simulator` under **Settings → Git**.
 4. Add `CATAN_API_BASE_URL=https://catansim.duckdns.org` under **Settings → Environment Variables** for Production and Preview.
 5. Deploy. `vercel.json` supplies `npm run build` and the `dist` output directory.
